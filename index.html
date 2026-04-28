@@ -1,0 +1,933 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ADHD Focus OS</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/app.css">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script defer src="/static/app.js"></script>
+    <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+</head>
+<body x-data="app()" x-init="init()" @keydown.window="handleKeydown($event)" :class="theme === 'dark' ? 'theme-dark' : 'theme-light'">
+    <div class="min-h-screen">
+        <header class="topbar z-40 border-b border-slate-200/70">
+            <div class="mx-auto max-w-[1850px] px-4 py-3 md:px-6">
+                <div class="flex flex-wrap items-center justify-between gap-3">
+                    <div class="min-w-0">
+                        <p class="text-[10px] font-black uppercase tracking-[0.24em] text-emerald-700">ADHD Focus</p>
+                        <div class="mt-1 flex flex-wrap items-center gap-2">
+                            <h1 class="text-lg font-black tracking-tight text-slate-900 md:text-xl">Planer skupienia</h1>
+                            <span class="compact-pill" x-text="formatCurrentDate()"></span>
+                        </div>
+                        <p x-show="!calmMode" x-cloak class="mt-1 max-w-2xl text-xs leading-5 text-slate-600" x-text="getTopBarGuidance()"></p>
+                    </div>
+
+                    <div class="flex flex-wrap gap-2">
+                        <button @click="toggleCalmMode()" class="rounded-xl border border-slate-300/80 bg-white/80 px-3 py-2 text-xs font-bold text-slate-600 transition-colors hover:bg-slate-100" x-text="calmMode ? 'Spokojny ON' : 'Spokojny OFF'"></button>
+                        <button @click="toggleTheme()" class="rounded-xl border border-slate-300/80 bg-white/80 px-3 py-2 text-xs font-bold text-slate-600 transition-colors hover:bg-slate-100" x-text="theme === 'dark' ? 'Jasny motyw' : 'Ciemny motyw'"></button>
+                        <button @click="view = 'brain'" class="rounded-xl border border-slate-300/80 bg-white/80 px-3 py-2 text-xs font-bold text-slate-600 transition-colors hover:bg-slate-100">Brain dump</button>
+                        <button @click="openNewTaskModal()" class="rounded-xl border border-slate-300/80 bg-white/90 px-3 py-2 text-xs font-bold text-slate-700 transition-colors hover:bg-slate-100">+ Zadanie</button>
+                        <button @click="addModulePrompt('praca')" class="rounded-xl bg-slate-900 px-3 py-2 text-xs font-bold text-white transition-colors hover:bg-slate-800">+ Modul</button>
+                        <button @click="startFlow()" class="rounded-xl bg-emerald-600 px-3 py-2 text-xs font-bold text-white transition-colors hover:bg-emerald-700">Flow</button>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <div class="mx-auto max-w-[1850px] px-4 py-4 md:px-6 xl:flex xl:items-start xl:gap-5">
+            <aside :class="sidebarCollapsed ? 'xl:w-[86px]' : 'xl:w-[300px]'" class="space-y-3 xl:sticky xl:top-[108px] xl:shrink-0 xl:self-start">
+                <section class="card p-3">
+                    <div class="mb-2 flex items-center justify-between">
+                        <p x-show="!sidebarCollapsed" x-cloak class="text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">Moduly</p>
+                        <button @click="toggleSidebar()" class="rounded-lg border border-slate-300/70 bg-white px-2 py-1 text-xs font-black text-slate-500 transition-colors hover:bg-slate-100" x-text="sidebarCollapsed ? '→' : '←'"></button>
+                    </div>
+
+                    <div x-show="!sidebarCollapsed" x-cloak class="mb-2 space-y-2">
+                        <div class="flex flex-wrap gap-2">
+                            <span class="compact-pill inline-flex" x-text="modules.length + ' modulow'"></span>
+                            <span class="compact-pill inline-flex" x-text="getActiveModulesCount() + ' aktywne'"></span>
+                        </div>
+                        <div class="grid grid-cols-2 gap-2">
+                            <button @click="addModulePrompt('praca')" class="rounded-xl bg-emerald-600 px-3 py-2 text-xs font-bold text-white transition-colors hover:bg-emerald-700">+ Praca</button>
+                            <button @click="addModulePrompt('prywatne')" class="rounded-xl bg-sky-600 px-3 py-2 text-xs font-bold text-white transition-colors hover:bg-sky-700">+ Prywatne</button>
+                        </div>
+                    </div>
+
+                    <div x-show="!sidebarCollapsed" x-cloak class="panel-scroll max-h-[54vh] space-y-3 overflow-y-auto pr-1">
+                        <template x-for="section in getSidebarSections()" :key="section.id">
+                            <div class="space-y-2">
+                                <div class="flex items-center justify-between px-1">
+                                    <p class="text-[10px] font-black uppercase tracking-[0.16em] text-slate-400" x-text="section.label"></p>
+                                    <span class="text-[10px] font-bold text-slate-400" x-text="section.modules.length"></span>
+                                </div>
+
+                                <template x-if="section.modules.length === 0">
+                                    <div class="rounded-[16px] border border-dashed border-slate-200 px-3 py-3 text-center text-[11px] text-slate-400">
+                                        Brak modulow
+                                    </div>
+                                </template>
+
+                                <template x-for="module in section.modules" :key="module.id">
+                                    <div class="flex gap-1.5">
+                                        <button @click="openModule(module)" :class="activeModule && activeModule.id === module.id && view === 'kanban' && taskScope === 'module' ? 'border-emerald-200 bg-emerald-50' : 'border-slate-200 bg-white hover:bg-slate-50'" class="flex-1 rounded-[18px] border px-3 py-2 text-left transition-all">
+                                            <div class="flex items-start justify-between gap-2">
+                                                <div class="min-w-0">
+                                                    <div class="flex items-start gap-2">
+                                                        <span :class="getModuleTheme(module.id).dot" class="mt-1 h-2 w-2 shrink-0 rounded-full"></span>
+                                                        <div class="module-name-wrap text-xs font-black text-slate-900" x-text="module.name"></div>
+                                                    </div>
+                                                    <div class="mt-1 text-[10px] text-slate-500">
+                                                        <span x-text="getModuleOpenCount(module.id)"></span>
+                                                        <span> otwarte</span>
+                                                    </div>
+                                                </div>
+                                                <span :class="getModuleTheme(module.id).badge" class="shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-bold" x-text="Math.round(module.progress || 0) + '%'"></span>
+                                            </div>
+                                        </button>
+                                        <div class="flex flex-col gap-1">
+                                            <button @click.stop="moveModule(module.id, -1)" :disabled="!canMoveModule(module.id, -1)" class="h-6 w-6 rounded-lg border border-slate-200 bg-white text-[10px] font-black text-slate-500 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40">↑</button>
+                                            <button @click.stop="moveModule(module.id, 1)" :disabled="!canMoveModule(module.id, 1)" class="h-6 w-6 rounded-lg border border-slate-200 bg-white text-[10px] font-black text-slate-500 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40">↓</button>
+                                            <button @click.stop="deleteModule(module)" class="h-6 w-6 rounded-lg border border-rose-200 bg-rose-50 text-[10px] font-black text-rose-600 transition-colors hover:bg-rose-100">✕</button>
+                                        </div>
+                                    </div>
+                                </template>
+                            </div>
+                        </template>
+
+                        <template x-if="modules.length === 0">
+                            <div class="rounded-[18px] border border-dashed border-slate-200 px-3 py-6 text-center text-xs text-slate-400">
+                                Dodaj pierwszy modul.
+                            </div>
+                        </template>
+                    </div>
+                </section>
+
+                <section class="card p-3">
+                    <p x-show="!sidebarCollapsed" x-cloak class="mb-2 text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">Widoki</p>
+                    <div class="grid gap-2">
+                        <button @click="openAllTasksView()" :class="view === 'kanban' ? 'bg-emerald-100 text-emerald-900 border-emerald-200' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'" class="rounded-xl border px-3 py-2 text-left text-xs font-bold transition-all">
+                            <span x-show="sidebarCollapsed" x-cloak>Z</span>
+                            <span x-show="!sidebarCollapsed" x-cloak>Zadania</span>
+                        </button>
+                        <button @click="view = 'dash'" :class="view === 'dash' ? 'bg-emerald-100 text-emerald-900 border-emerald-200' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'" class="rounded-xl border px-3 py-2 text-left text-xs font-bold transition-all">
+                            <span x-show="sidebarCollapsed" x-cloak>F</span>
+                            <span x-show="!sidebarCollapsed" x-cloak>Fokus</span>
+                        </button>
+                        <button @click="view = 'global'" :class="view === 'global' ? 'bg-emerald-100 text-emerald-900 border-emerald-200' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'" class="rounded-xl border px-3 py-2 text-left text-xs font-bold transition-all">
+                            <span x-show="sidebarCollapsed" x-cloak>M</span>
+                            <span x-show="!sidebarCollapsed" x-cloak>Moduly</span>
+                        </button>
+                        <button @click="view = 'calendar'" :class="view === 'calendar' ? 'bg-emerald-100 text-emerald-900 border-emerald-200' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'" class="rounded-xl border px-3 py-2 text-left text-xs font-bold transition-all">
+                            <span x-show="sidebarCollapsed" x-cloak>W</span>
+                            <span x-show="!sidebarCollapsed" x-cloak>Kalendarz</span>
+                        </button>
+                        <button @click="view = 'brain'" :class="view === 'brain' ? 'bg-emerald-100 text-emerald-900 border-emerald-200' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'" class="rounded-xl border px-3 py-2 text-left text-xs font-bold transition-all">
+                            <span x-show="sidebarCollapsed" x-cloak>B</span>
+                            <span x-show="!sidebarCollapsed" x-cloak>Brain dump</span>
+                        </button>
+                        <button @click="view = 'monthly'" :class="view === 'monthly' ? 'bg-emerald-100 text-emerald-900 border-emerald-200' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'" class="rounded-xl border px-3 py-2 text-left text-xs font-bold transition-all">
+                            <span x-show="sidebarCollapsed" x-cloak>R</span>
+                            <span x-show="!sidebarCollapsed" x-cloak>Miesieczne</span>
+                        </button>
+                        <button @click="view = 'debts'" :class="view === 'debts' ? 'bg-emerald-100 text-emerald-900 border-emerald-200' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'" class="rounded-xl border px-3 py-2 text-left text-xs font-bold transition-all">
+                            <span x-show="sidebarCollapsed" x-cloak>S</span>
+                            <span x-show="!sidebarCollapsed" x-cloak>Splaty</span>
+                        </button>
+                    </div>
+                </section>
+            </aside>
+
+            <main class="mt-4 min-w-0 flex-1 xl:mt-0">
+                <template x-if="view === 'dash'">
+                    <div x-cloak class="space-y-6">
+                        <div class="grid gap-6 2xl:grid-cols-[1.18fr_0.82fr]">
+                            <section class="card focus-hero p-6 md:p-7">
+                                <div class="flex flex-wrap items-start justify-between gap-4">
+                                    <div>
+                                        <p class="text-[11px] font-black uppercase tracking-[0.22em] text-emerald-700">Zacznij od tego</p>
+                                        <h2 class="mt-2 text-3xl font-black tracking-tight text-slate-900">Jedna rzecz na teraz</h2>
+                                        <p class="mt-2 max-w-2xl text-sm leading-7 text-slate-500">Kiedy czujesz za duzo, nie wybieraj z calej listy. Zacznij od jednej rzeczy, ktora najbardziej odblokowuje dzien.</p>
+                                    </div>
+                                    <button @click="startFlow()" class="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-bold text-white transition-colors hover:bg-slate-800">Odpal focus timer</button>
+                                </div>
+
+                                <template x-if="getFocusTask()">
+                                    <div class="mt-6">
+                                        <div class="mb-4 flex flex-wrap gap-2">
+                                            <span :class="getModuleTheme(getFocusTask().module_id).badge" class="rounded-full border px-3 py-1 text-xs font-bold" x-text="getModuleName(getFocusTask().module_id)"></span>
+                                            <span x-show="hasPriority(getFocusTask())" x-cloak :class="getPriorityBadgeClass(getFocusTask().priority)" class="rounded-full px-3 py-1 text-xs font-bold" x-text="getPriorityLabel(getFocusTask().priority)"></span>
+                                            <span :class="getUrgencyClass(getFocusTask())" class="rounded-full px-3 py-1 text-xs font-bold" x-text="getTaskUrgencyLabel(getFocusTask())"></span>
+                                            <span class="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-500" x-text="getTaskTimeLabel(getFocusTask())"></span>
+                                        </div>
+                                        <h3 class="max-w-3xl text-3xl font-black leading-tight text-slate-900" x-text="getFocusTask().name"></h3>
+                                        <p class="mt-4 max-w-2xl text-sm leading-7 text-slate-600" x-text="getFocusCoach(getFocusTask())"></p>
+                                        <div class="mt-6 flex flex-wrap gap-3">
+                                            <button @click="kickTaskOff(getFocusTask())" class="rounded-2xl bg-emerald-600 px-5 py-3 text-sm font-bold text-white shadow-[0_12px_24px_rgba(5,150,105,0.22)] transition-colors hover:bg-emerald-700" x-text="getFocusTask().status === 'todo' ? 'Otworz zadanie' : 'Wrzuc do TODO i otworz'"></button>
+                                            <button @click="goToTask(getFocusTask())" class="rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-bold text-slate-600 transition-colors hover:bg-slate-50">Pokaz modul</button>
+                                        </div>
+                                    </div>
+                                </template>
+
+                                <template x-if="!getFocusTask()">
+                                    <div class="mt-6 rounded-[24px] bg-white/80 p-6 text-sm leading-7 text-slate-500">
+                                        Gdy dodasz zadania, tutaj pojawi sie najczytelniejszy start.
+                                    </div>
+                                </template>
+                            </section>
+
+                            <div class="space-y-4">
+                                <section class="card p-5">
+                                    <p class="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400">Plan dnia</p>
+                                    <h3 class="mt-1 text-2xl font-black text-slate-900">Nastepne 3 kroki</h3>
+                                    <div class="mt-4 space-y-3">
+                                        <template x-for="(task, index) in getRecommendedTasks(3)" :key="task.id">
+                                            <div class="rounded-[22px] border border-slate-200 bg-slate-50/90 p-4">
+                                                <div class="flex items-start justify-between gap-3">
+                                                    <div class="min-w-0">
+                                                        <div class="flex items-center gap-2">
+                                                            <span class="rounded-full bg-white px-2 py-1 text-[10px] font-black uppercase tracking-[0.16em] text-slate-500" x-text="getPlanSlotLabel(index)"></span>
+                                                            <span :class="getModuleTheme(task.module_id).badge" class="rounded-full border px-2 py-1 text-[10px] font-bold" x-text="getModuleName(task.module_id)"></span>
+                                                        </div>
+                                                        <div class="mt-3 text-sm font-bold leading-6 text-slate-900" x-text="task.name"></div>
+                                                        <div x-show="getTaskDescriptionPreview(task)" x-cloak class="mt-1 text-[11px] leading-4 text-slate-600" x-text="getTaskDescriptionPreview(task)"></div>
+                                                    </div>
+                                                    <span :class="getUrgencyClass(task)" class="rounded-full px-2.5 py-1 text-[11px] font-bold" x-text="getTaskUrgencyLabel(task)"></span>
+                                                </div>
+                                            </div>
+                                        </template>
+                                        <template x-if="getRecommendedTasks(3).length === 0">
+                                            <div class="rounded-[22px] border border-dashed border-slate-200 px-4 py-8 text-center text-sm text-slate-400">
+                                                Tu pojawia sie kolejne kroki, kiedy dodasz zadania.
+                                            </div>
+                                        </template>
+                                    </div>
+                                </section>
+
+                                <section class="card p-5">
+                                    <p class="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400">Gdy robi sie za duzo</p>
+                                    <h3 class="mt-1 text-2xl font-black text-slate-900">Protokol awaryjny</h3>
+                                    <div class="mt-4 space-y-3 text-sm leading-7 text-slate-600">
+                                        <div class="rounded-[22px] bg-slate-50 px-4 py-4"><span class="font-black text-slate-900">1.</span> Wrzuc wszystko do `brain dump`, zamiast probowac utrzymac to w glowie.</div>
+                                        <div class="rounded-[22px] bg-slate-50 px-4 py-4"><span class="font-black text-slate-900">2.</span> Wybierz tylko jedna rzecz z sekcji powyzej i wrzuc ja do `TODO`.</div>
+                                        <div class="rounded-[22px] bg-slate-50 px-4 py-4"><span class="font-black text-slate-900">3.</span> Odpal `flow` na 15-25 minut. Dopiero po nim wybieraj nastepne.</div>
+                                    </div>
+                                </section>
+                            </div>
+                        </div>
+
+                        <div class="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
+                            <section class="card p-5 md:p-6">
+                                <div class="mb-5 flex flex-wrap items-end justify-between gap-4">
+                                    <div>
+                                        <p class="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400">Na radarze</p>
+                                        <h3 class="mt-1 text-2xl font-black text-slate-900">Pilne terminy i rzeczy, ktore wisza</h3>
+                                    </div>
+                                    <button @click="view = 'calendar'" class="rounded-2xl bg-slate-100 px-4 py-2.5 text-sm font-bold text-slate-600 transition-colors hover:bg-slate-200">Otworz kalendarz</button>
+                                </div>
+                                <div class="grid gap-3 md:grid-cols-2">
+                                    <template x-for="task in getUrgentTasks(4)" :key="task.id">
+                                        <div class="rounded-[24px] border border-slate-200 bg-slate-50/80 p-4">
+                                            <div class="flex flex-wrap items-center gap-2">
+                                                <span :class="getModuleTheme(task.module_id).badge" class="rounded-full border px-2.5 py-1 text-[11px] font-bold" x-text="getModuleName(task.module_id)"></span>
+                                                <span :class="getUrgencyClass(task)" class="rounded-full px-2.5 py-1 text-[11px] font-bold" x-text="getTaskUrgencyLabel(task)"></span>
+                                            </div>
+                                            <div class="mt-3 text-sm font-bold leading-6 text-slate-900" x-text="task.name"></div>
+                                            <div x-show="getTaskDescriptionPreview(task)" x-cloak class="mt-1 text-[11px] leading-4 text-slate-600" x-text="getTaskDescriptionPreview(task)"></div>
+                                            <div class="mt-4 flex gap-2">
+                                                <button @click="openTaskModal(task)" class="rounded-xl bg-white px-3 py-2 text-xs font-bold text-slate-600 transition-colors hover:bg-slate-100">Szczegoly</button>
+                                                <button @click="kickTaskOff(task)" class="rounded-xl bg-slate-900 px-3 py-2 text-xs font-bold text-white transition-colors hover:bg-slate-800">Start</button>
+                                            </div>
+                                        </div>
+                                    </template>
+                                    <template x-if="getUrgentTasks(4).length === 0">
+                                        <div class="rounded-[24px] border border-dashed border-slate-200 px-4 py-8 text-center text-sm text-slate-400 md:col-span-2">
+                                            Brak pilnych rzeczy. To dobry moment na spokojne domykanie.
+                                        </div>
+                                    </template>
+                                </div>
+                            </section>
+
+                            <section class="card p-5 md:p-6">
+                                <div class="mb-5 flex flex-wrap items-end justify-between gap-4">
+                                    <div>
+                                        <p class="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400">Brain dump</p>
+                                        <h3 class="mt-1 text-2xl font-black text-slate-900">Wyrzuc wszystko z glowy</h3>
+                                    </div>
+                                    <button @click="view = 'brain'" class="rounded-2xl bg-slate-100 px-4 py-2.5 text-sm font-bold text-slate-600 transition-colors hover:bg-slate-200">Pelny widok</button>
+                                </div>
+
+                                <div class="rounded-[24px] border border-slate-200 bg-slate-50/80 p-4">
+                                    <p class="text-sm leading-7 text-slate-600" x-text="getBrainDumpPreview()"></p>
+                                </div>
+
+                                <div class="mt-4 grid gap-3 md:grid-cols-2">
+                                    <div class="rounded-[22px] bg-emerald-50 px-4 py-4">
+                                        <div class="text-2xl font-black text-emerald-700" x-text="countBrainDumpLines()"></div>
+                                        <div class="mt-1 text-xs font-bold uppercase tracking-[0.18em] text-emerald-700/80">linii do zrzutu</div>
+                                    </div>
+                                    <div class="rounded-[22px] bg-slate-100 px-4 py-4">
+                                        <div class="text-2xl font-black text-slate-700" x-text="noteSavedAt ? formatNoteTimestamp(noteSavedAt) : 'brak'"></div>
+                                        <div class="mt-1 text-xs font-bold uppercase tracking-[0.18em] text-slate-500">ostatni zapis</div>
+                                    </div>
+                                </div>
+                            </section>
+                        </div>
+
+                        <section class="card p-5 md:p-6">
+                            <div class="mb-5 flex flex-wrap items-end justify-between gap-4">
+                                <div>
+                                    <p class="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400">Moduly</p>
+                                    <h3 class="mt-1 text-2xl font-black text-slate-900">Szybki podglad bez przeklikiwania</h3>
+                                </div>
+                                <button @click="view = 'global'" class="rounded-2xl bg-slate-100 px-4 py-2.5 text-sm font-bold text-slate-600 transition-colors hover:bg-slate-200">Kanban wszystkich modulow</button>
+                            </div>
+
+                            <div class="grid gap-4 lg:grid-cols-2 2xl:grid-cols-3">
+                                <template x-for="module in getModulesSortedByWorkload()" :key="module.id">
+                                    <div class="card soft-panel p-5">
+                                        <div class="flex items-start justify-between gap-3">
+                                            <div class="min-w-0">
+                                                <div class="flex items-center gap-2">
+                                                    <span :class="getModuleTheme(module.id).dot" class="h-2.5 w-2.5 rounded-full"></span>
+                                                    <h4 class="module-name-wrap text-lg font-black text-slate-900" x-text="module.name"></h4>
+                                                    <span class="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[10px] font-bold text-slate-500" x-text="getModuleCategoryLabel(module.category)"></span>
+                                                </div>
+                                                <p class="mt-2 text-xs text-slate-500">
+                                                    <span x-text="getModuleOpenCount(module.id)"></span>
+                                                    <span>otwarte</span>
+                                                    <span class="mx-1">•</span>
+                                                    <span x-text="getModuleTodoCount(module.id)"></span>
+                                                    <span>w toku</span>
+                                                </p>
+                                            </div>
+                                            <span :class="getModuleTheme(module.id).badge" class="rounded-full border px-3 py-1.5 text-xs font-bold" x-text="Math.round(module.progress || 0) + '%'"></span>
+                                        </div>
+
+                                        <div class="mt-4 h-2 overflow-hidden rounded-full bg-slate-100">
+                                            <div class="h-full rounded-full transition-all duration-500" :class="getModuleTheme(module.id).bar" :style="`width: ${module.progress || 0}%`"></div>
+                                        </div>
+
+                                        <div class="mt-4 space-y-2">
+                                            <template x-for="task in getModulePreviewTasks(module.id, 3)" :key="task.id">
+                                                <button @click="openTaskModal(task)" :class="`priority-${task.priority}`" class="flex w-full items-start justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-3 py-3 text-left transition-colors hover:bg-slate-50">
+                                                    <div class="min-w-0">
+                                                        <div class="truncate text-sm font-bold text-slate-800" x-text="task.name"></div>
+                                                        <div x-show="getTaskDescriptionPreview(task)" x-cloak class="mt-1 text-[11px] leading-4 text-slate-600" x-text="getTaskDescriptionPreview(task)"></div>
+                                                        <div class="mt-1 text-[11px] text-slate-500">
+                                                            <span x-text="getStatusLabel(task.status)"></span>
+                                                            <span class="mx-1">•</span>
+                                                            <span x-text="getTaskTimeLabel(task)"></span>
+                                                        </div>
+                                                    </div>
+                                                    <span :class="getUrgencyClass(task)" class="rounded-full px-2.5 py-1 text-[11px] font-bold" x-text="getTaskUrgencyLabel(task)"></span>
+                                                </button>
+                                            </template>
+                                            <template x-if="getModulePreviewTasks(module.id, 3).length === 0">
+                                                <div class="rounded-[22px] border border-dashed border-slate-200 px-4 py-6 text-center text-sm text-slate-400">
+                                                    Tu jest spokojnie. Mozesz odetchnac.
+                                                </div>
+                                            </template>
+                                        </div>
+
+                                        <button @click="openModule(module)" class="mt-4 w-full rounded-2xl bg-slate-900 px-4 py-3 text-sm font-bold text-white transition-colors hover:bg-slate-800">Otworz modul</button>
+                                    </div>
+                                </template>
+
+                                <template x-if="modules.length === 0">
+                                    <div class="card col-span-full p-8 text-center text-slate-500">
+                                        Najpierw dodaj modul, potem wrzuc zadania. Dashboard zacznie od razu sugerowac, od czego ruszyc.
+                                    </div>
+                                </template>
+                            </div>
+                        </section>
+                    </div>
+                </template>
+
+                <template x-if="view === 'global'">
+                    <div x-cloak class="space-y-5">
+                        <section class="card p-5 md:p-6">
+                            <div class="flex flex-wrap items-start justify-between gap-4">
+                                <div>
+                                    <p class="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400">Kanban wszystkich modulow</p>
+                                    <h2 class="mt-1 text-3xl font-black tracking-tight text-slate-900">Kazdy modul osobno, bez mieszania wszystkiego w jednej kolumnie</h2>
+                                    <p x-show="!calmMode" x-cloak class="mt-2 max-w-3xl text-sm leading-7 text-slate-500">Tutaj zadania sa pogrupowane per modul. Zamiast jednej ogromnej kolumny `wstepne`, widzisz osobne sekcje i latwiej zlapac kontekst.</p>
+                                </div>
+                                <div class="flex flex-wrap gap-2">
+                                    <div class="flex rounded-2xl border border-slate-200 bg-white p-1 text-xs font-bold shadow-sm">
+                                        <button @click="priorityFilter = 'ALL'" :class="priorityFilter === 'ALL' ? 'bg-slate-900 text-white' : 'text-slate-500'" class="rounded-xl px-3 py-2 transition-all">Wszystkie</button>
+                                        <button @click="priorityFilter = 'P1'" :class="priorityFilter === 'P1' ? 'bg-red-500 text-white' : 'text-slate-500'" class="rounded-xl px-3 py-2 transition-all">P1</button>
+                                        <button @click="priorityFilter = 'P2'" :class="priorityFilter === 'P2' ? 'bg-amber-500 text-white' : 'text-slate-500'" class="rounded-xl px-3 py-2 transition-all">P2</button>
+                                        <button @click="priorityFilter = 'P3'" :class="priorityFilter === 'P3' ? 'bg-blue-500 text-white' : 'text-slate-500'" class="rounded-xl px-3 py-2 transition-all">P3</button>
+                                    </div>
+                                    <div class="flex rounded-2xl border border-slate-200 bg-white p-1 text-xs font-bold shadow-sm">
+                                        <button @click="setFocusFilter('all')" :class="focusFilter === 'all' ? 'bg-slate-900 text-white' : 'text-slate-500'" class="rounded-xl px-3 py-2 transition-all">Pelny</button>
+                                        <button @click="setFocusFilter('now')" :class="focusFilter === 'now' ? 'bg-emerald-600 text-white' : 'text-slate-500'" class="rounded-xl px-3 py-2 transition-all">Tylko teraz</button>
+                                    </div>
+                                    <button @click="view = 'calendar'" class="rounded-2xl bg-slate-100 px-4 py-2.5 text-sm font-bold text-slate-600 transition-colors hover:bg-slate-200">Kalendarz</button>
+                                </div>
+                            </div>
+                        </section>
+
+                        <template x-for="module in getGlobalModules()" :key="module.id">
+                            <section class="card p-5">
+                                <div class="flex flex-wrap items-start justify-between gap-4">
+                                    <div class="min-w-0">
+                                        <div class="flex flex-wrap items-center gap-2">
+                                            <span :class="getModuleTheme(module.id).dot" class="h-3 w-3 rounded-full"></span>
+                                            <h3 class="module-name-wrap text-2xl font-black text-slate-900" x-text="module.name"></h3>
+                                            <span :class="getModuleTheme(module.id).badge" class="rounded-full border px-3 py-1 text-xs font-bold" x-text="getModuleVisibleCount(module.id) + ' widocznych'"></span>
+                                            <span class="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[10px] font-bold text-slate-500" x-text="getModuleCategoryLabel(module.category)"></span>
+                                        </div>
+                                        <p class="mt-2 text-sm text-slate-500">
+                                            <span x-text="getModuleOpenCount(module.id)"></span>
+                                            <span>otwartych</span>
+                                            <span class="mx-1">•</span>
+                                            <span x-text="getModuleUrgentCount(module.id)"></span>
+                                            <span>pilnych</span>
+                                        </p>
+                                    </div>
+
+                                    <div class="flex flex-wrap gap-2">
+                                        <button @click="toggleGlobalLane(module.id)" class="rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-500 transition-colors hover:bg-slate-50" x-text="isGlobalLaneCollapsed(module.id) ? 'Pokaz kolumny' : 'Zwin modul'"></button>
+                                        <button @click="openModule(module)" class="rounded-2xl bg-slate-900 px-4 py-2.5 text-sm font-bold text-white transition-colors hover:bg-slate-800">Otworz modul</button>
+                                    </div>
+                                </div>
+
+                                <template x-if="!isGlobalLaneCollapsed(module.id)">
+                                    <div class="mt-5 grid gap-3 xl:grid-cols-5">
+                                        <template x-for="col in columnsMeta" :key="col.id">
+                                            <div @dragover.prevent @drop.prevent="dropTaskToColumn(col.id)" :class="draggedTaskId ? 'kanban-col-droppable' : ''" class="rounded-[24px] border border-slate-200 bg-slate-50/80 p-3">
+                                                <div class="flex items-center justify-between gap-2">
+                                                    <h4 :class="`text-[11px] font-black uppercase tracking-[0.22em] ${col.color}`" x-text="col.name"></h4>
+                                                    <span class="rounded-full bg-white px-2 py-1 text-[10px] font-bold text-slate-500" x-text="getModuleTasksByStatus(module.id, col.id).length"></span>
+                                                </div>
+
+                                                <div class="mt-3 space-y-2">
+                                                    <template x-for="task in getModuleTasksByStatus(module.id, col.id)" :key="task.id">
+                                                        <div @click="openTaskModal(task)" draggable="true" @dragstart.stop="startTaskDrag(task, $event)" @dragend="endTaskDrag()" :class="`priority-${task.priority}`" class="rounded-[20px] border border-slate-200 bg-white p-3 cursor-pointer transition-colors hover:bg-slate-50 cursor-grab active:cursor-grabbing">
+                                                            <div class="flex items-start justify-between gap-2">
+                                                                <div class="flex items-center gap-1.5">
+                                                                    <span x-show="hasPriority(task)" :class="getPriorityDotClass(task.priority)" class="h-2 w-2 rounded-full"></span>
+                                                                    <span :class="getUrgencyClass(task)" class="rounded-full px-2 py-1 text-[10px] font-bold" x-text="getTaskUrgencyLabel(task)"></span>
+                                                                </div>
+                                                                <span class="text-[10px] font-mono font-bold text-slate-400" x-text="task.estimated_time > 0 ? task.estimated_time + ' min' : ''"></span>
+                                                            </div>
+                                                            <div class="mt-2 text-sm font-bold leading-6 text-slate-900" :class="task.status === 'gotowe' ? 'line-through text-slate-400' : ''" x-text="task.name"></div>
+                                                            <div x-show="getTaskDescriptionPreview(task, taskScope === 'module' ? 14 : 8)" x-cloak class="mt-1 text-[11px] leading-4 text-slate-600" x-text="getTaskDescriptionPreview(task, taskScope === 'module' ? 14 : 8)"></div>
+                                                        </div>
+                                                    </template>
+
+                                                    <template x-if="getModuleTasksByStatus(module.id, col.id).length === 0">
+                                                        <div class="rounded-[20px] border border-dashed border-slate-200 px-3 py-8 text-center text-[11px] font-bold uppercase tracking-[0.18em] text-slate-300">
+                                                            Brak
+                                                        </div>
+                                                    </template>
+                                                </div>
+                                            </div>
+                                        </template>
+                                    </div>
+                                </template>
+                            </section>
+                        </template>
+
+                        <template x-if="getGlobalModules().length === 0">
+                            <section class="card p-8 text-center text-slate-500">
+                                Nie ma jeszcze modulow. Dodaj pierwszy modul.
+                            </section>
+                        </template>
+                    </div>
+                </template>
+
+                <template x-if="view === 'kanban'">
+                    <div x-cloak class="space-y-5">
+                        <section class="card p-5 md:p-6">
+                            <div class="flex flex-wrap items-start justify-between gap-4">
+                                <div class="min-w-0">
+                                    <p class="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400">Zadania</p>
+                                    <div class="mt-1 flex flex-wrap items-center gap-3">
+                                        <h2 class="truncate text-3xl font-black tracking-tight text-slate-900" x-text="getScopeLabel()"></h2>
+                                        <span x-show="taskScope === 'module' && activeModule" :class="activeModule ? getModuleTheme(activeModule.id).badge : ''" class="rounded-full border px-3 py-1 text-xs font-bold" x-text="activeModule ? Math.round(activeModule.progress || 0) + '%' : ''"></span>
+                                    </div>
+                                    <p x-show="!calmMode" x-cloak class="mt-2 text-sm text-slate-500">Widok zadan laczy wszystko razem. Mozesz przelaczyc na pojedynczy modul, ale domyslnie widzisz calosc.</p>
+                                </div>
+
+                                <div class="flex flex-wrap gap-2">
+                                    <div class="flex rounded-xl border border-slate-200 bg-white p-1 text-xs font-bold shadow-sm">
+                                        <button @click="setTaskScope('all')" :class="taskScope === 'all' ? 'bg-emerald-600 text-white' : 'text-slate-500'" class="rounded-lg px-2.5 py-1.5 transition-all">Wszystkie</button>
+                                        <button @click="setTaskScope('module')" :disabled="!activeModule" :class="taskScope === 'module' ? 'bg-slate-900 text-white' : 'text-slate-500'" class="rounded-lg px-2.5 py-1.5 transition-all disabled:cursor-not-allowed disabled:opacity-40">1 modul</button>
+                                    </div>
+                                    <div class="flex rounded-xl border border-slate-200 bg-white p-1 text-xs font-bold shadow-sm">
+                                        <button @click="priorityFilter = 'ALL'" :class="priorityFilter === 'ALL' ? 'bg-slate-900 text-white' : 'text-slate-500'" class="rounded-lg px-2.5 py-1.5 transition-all">ALL</button>
+                                        <button @click="priorityFilter = 'P1'" :class="priorityFilter === 'P1' ? 'bg-red-500 text-white' : 'text-slate-500'" class="rounded-lg px-2.5 py-1.5 transition-all">P1</button>
+                                        <button @click="priorityFilter = 'P2'" :class="priorityFilter === 'P2' ? 'bg-amber-500 text-white' : 'text-slate-500'" class="rounded-lg px-2.5 py-1.5 transition-all">P2</button>
+                                        <button @click="priorityFilter = 'P3'" :class="priorityFilter === 'P3' ? 'bg-blue-500 text-white' : 'text-slate-500'" class="rounded-lg px-2.5 py-1.5 transition-all">P3</button>
+                                    </div>
+                                    <div class="flex rounded-xl border border-slate-200 bg-white p-1 text-xs font-bold shadow-sm">
+                                        <button @click="setFocusFilter('all')" :class="focusFilter === 'all' ? 'bg-slate-900 text-white' : 'text-slate-500'" class="rounded-lg px-2.5 py-1.5 transition-all">Pelny</button>
+                                        <button @click="setFocusFilter('now')" :class="focusFilter === 'now' ? 'bg-emerald-600 text-white' : 'text-slate-500'" class="rounded-lg px-2.5 py-1.5 transition-all">Tylko teraz</button>
+                                    </div>
+                                    <button @click="openNewTaskModal(activeModule ? activeModule.id : null)" class="rounded-xl border border-emerald-200 bg-white px-3 py-2 text-xs font-bold text-emerald-700 transition-colors hover:bg-emerald-50">+ Zadanie</button>
+                                    <button @click="view = 'global'" class="rounded-xl bg-slate-100 px-3 py-2 text-xs font-bold text-slate-600 transition-colors hover:bg-slate-200">Wszystkie moduly</button>
+                                </div>
+                            </div>
+
+                            <div x-show="!calmMode" x-cloak class="mt-4 grid gap-2 md:grid-cols-3">
+                                <div class="card p-3">
+                                    <div class="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">Do ruszenia</div>
+                                    <div class="mt-1 text-2xl font-black text-slate-900" x-text="getFilteredTaskCountForModule()"></div>
+                                </div>
+                                <div class="card p-3">
+                                    <div class="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">W toku</div>
+                                    <div class="mt-1 text-2xl font-black text-cyan-600" x-text="getFilteredAndSortedTasks('todo').length"></div>
+                                </div>
+                                <div class="card p-3">
+                                    <div class="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">Pilne</div>
+                                    <div class="mt-1 text-2xl font-black text-red-500" x-text="getFilteredPriorityCountForModule('P1')"></div>
+                                </div>
+                            </div>
+
+                        </section>
+
+                        <section class="board-scroll overflow-x-auto">
+                            <div class="flex flex-col gap-4 md:min-w-[1250px] md:flex-row">
+                                <template x-for="col in columnsMeta" :key="col.id">
+                                    <div class="kanban-col flex-1 p-3" @dragover.prevent @drop.prevent="dropTaskToColumn(col.id)" :class="draggedTaskId ? 'kanban-col-droppable' : ''">
+                                        <div class="mb-3 flex items-center justify-between gap-2">
+                                            <h3 :class="`text-[11px] font-black uppercase tracking-[0.22em] ${col.color}`">
+                                                <span x-text="col.name"></span>
+                                                <span class="ml-2 rounded-full bg-white px-2 py-1 text-[10px] text-slate-500" x-text="getFilteredAndSortedTasks(col.id).length"></span>
+                                            </h3>
+
+                                            <template x-if="col.id === 'oczekujace'">
+                                                <select x-model="sortOrder" class="rounded-xl bg-transparent px-2 py-1 text-[11px] font-bold text-slate-400 outline-none">
+                                                    <option value="none">Sortuj</option>
+                                                    <option value="asc">Najkrotsze</option>
+                                                    <option value="desc">Najdluzsze</option>
+                                                </select>
+                                            </template>
+                                        </div>
+
+                                        <div class="task-list-scroll max-h-[46vh] space-y-3 overflow-y-auto pb-2 md:max-h-[68vh]">
+                                            <template x-for="group in getDisplayTaskGroups(col.id)" :key="`${col.id}-${group.moduleId}`">
+                                                <div :class="taskScope === 'all' ? getModuleTheme(group.moduleId).soft : ''" class="space-y-2 rounded-2xl border border-transparent p-2">
+                                                    <div x-show="taskScope === 'all'" x-cloak :class="getModuleTheme(group.moduleId).badge" class="rounded-xl border px-2.5 py-1.5 text-[10px] font-black uppercase tracking-[0.16em]">
+                                                        <span x-text="group.moduleName"></span>
+                                                        <span class="ml-1 text-slate-400" x-text="'(' + group.tasks.length + ')'"></span>
+                                                    </div>
+
+                                                    <template x-for="task in group.tasks" :key="task.id">
+                                                        <div
+                                                            @click="openTaskModal(task)"
+                                                            draggable="true"
+                                                            @dragstart.stop="startTaskDrag(task, $event)"
+                                                            @dragend="endTaskDrag()"
+                                                            :class="`card priority-${task.priority} group relative cursor-pointer p-2 transition-all hover:border-slate-300 cursor-grab active:cursor-grabbing ${taskScope === 'all' ? getModuleTheme(task.module_id).soft : ''}`"
+                                                        >
+                                                            <button @click.stop="deleteTask(task.id)" class="absolute right-2 top-2 text-[11px] font-bold text-slate-300 opacity-0 transition-all hover:text-red-500 group-hover:opacity-100">✕</button>
+                                                            <div class="mb-1.5 flex items-start justify-between gap-2 pr-5">
+                                                                <div class="flex flex-wrap items-center gap-1.5">
+                                                                    <span x-show="hasPriority(task)" :class="getPriorityDotClass(task.priority)" class="h-2 w-2 rounded-full"></span>
+                                                                    <span :class="getUrgencyClass(task)" class="rounded-full px-2 py-0.5 text-[10px] font-bold" x-text="getTaskUrgencyLabel(task)"></span>
+                                                                </div>
+                                                                <span class="text-[10px] font-mono font-bold text-slate-400" x-text="task.estimated_time > 0 ? task.estimated_time + ' min' : ''"></span>
+                                                            </div>
+                                                            <div class="text-xs font-bold leading-5 text-slate-900" :class="task.status === 'gotowe' ? 'line-through text-slate-400' : ''" x-text="task.name"></div>
+                                                            <div x-show="getTaskDescriptionPreview(task)" x-cloak class="mt-1 text-[11px] leading-4 text-slate-600" x-text="getTaskDescriptionPreview(task)"></div>
+                                                        </div>
+                                                    </template>
+                                                </div>
+                                            </template>
+
+                                            <template x-if="getFilteredAndSortedTasks(col.id).length === 0">
+                                                <div class="rounded-[20px] border border-dashed border-slate-200 px-4 py-10 text-center text-[11px] font-bold uppercase tracking-[0.18em] text-slate-300">
+                                                    Brak zadan
+                                                </div>
+                                            </template>
+                                        </div>
+                                    </div>
+                                </template>
+                            </div>
+                        </section>
+                    </div>
+                </template>
+
+                <template x-if="view === 'calendar'">
+                    <div x-cloak class="space-y-6">
+                        <section class="card p-5 md:p-6">
+                            <div class="flex flex-wrap items-start justify-between gap-4">
+                                <div>
+                                    <p class="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400">Kalendarz</p>
+                                    <h2 class="mt-1 text-3xl font-black tracking-tight text-slate-900">Pelny miesiac z wszystkimi zadaniami</h2>
+                                    <p class="mt-2 max-w-3xl text-sm leading-7 text-slate-500">Kazdy dzien pokazuje pelna liste zadan z terminem. Gdy jest ich duzo, lista w komorce przewija sie bez rozpychania widoku.</p>
+                                </div>
+                                <div class="flex flex-wrap gap-2">
+                                    <button @click="shiftCalendar(-1)" class="rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-500 transition-colors hover:bg-slate-50">←</button>
+                                    <button @click="goToToday()" class="rounded-2xl bg-slate-100 px-4 py-2.5 text-sm font-bold text-slate-600 transition-colors hover:bg-slate-200">Dzisiaj</button>
+                                    <button @click="shiftCalendar(1)" class="rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-500 transition-colors hover:bg-slate-50">→</button>
+                                </div>
+                            </div>
+
+                            <div class="mt-5 flex flex-wrap items-center justify-between gap-3">
+                                <h3 class="text-2xl font-black text-slate-900" x-text="getCalendarLabel()"></h3>
+                                <span class="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-500" x-text="getOpenTasks().filter(task => task.due_date).length + ' zadan z terminem'"></span>
+                            </div>
+
+                            <div class="mt-4 mb-3 grid grid-cols-7 gap-2 md:gap-3">
+                                <template x-for="weekday in weekLabels" :key="weekday">
+                                    <div class="px-1 text-center text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 md:text-[11px]" x-text="weekday"></div>
+                                </template>
+                            </div>
+
+                            <div class="grid grid-cols-7 gap-2 md:gap-3">
+                                <template x-for="day in getMonthDays()" :key="day.dateKey">
+                                    <div :class="day.isToday ? 'border-emerald-300 ring-2 ring-emerald-100' : (day.isCurrentMonth ? 'border-slate-200' : 'border-slate-100')" class="calendar-cell rounded-[18px] border bg-white p-2 md:rounded-[20px] md:p-2.5">
+                                        <div class="flex items-center justify-between gap-1">
+                                            <div class="text-[11px] font-black md:text-sm" :class="day.isCurrentMonth ? 'text-slate-900' : 'text-slate-400'" x-text="day.dayNumber"></div>
+                                            <span x-show="day.tasks.length > 0" class="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold text-slate-500" x-text="day.tasks.length"></span>
+                                        </div>
+                                        <div class="calendar-task-list mt-1.5 space-y-1">
+                                            <template x-for="task in day.tasks" :key="task.id">
+                                                <button @click="openTaskModal(task)" :class="`priority-${task.priority}`" class="flex w-full items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-1.5 py-1 text-left text-[10px] font-bold leading-4 transition-colors hover:bg-slate-100">
+                                                    <span :class="getModuleTheme(task.module_id).dot" class="h-1.5 w-1.5 shrink-0 rounded-full"></span>
+                                                    <span class="truncate" x-text="task.name"></span>
+                                                </button>
+                                            </template>
+                                        </div>
+                                    </div>
+                                </template>
+                            </div>
+                        </section>
+                    </div>
+                </template>
+
+                <template x-if="view === 'brain'">
+                    <div x-cloak class="space-y-6">
+                        <section class="card p-5 md:p-6">
+                            <div class="flex flex-wrap items-start justify-between gap-4">
+                                <div>
+                                    <p class="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400">Brain dump</p>
+                                    <h2 class="mt-1 text-3xl font-black tracking-tight text-slate-900">Najpierw wyrzuc wszystko z glowy, potem dopiero planuj</h2>
+                                    <p class="mt-2 max-w-3xl text-sm leading-7 text-slate-500">To miejsce jest specjalnie po to, zeby nie musiec trzymac wszystkiego w pamieci roboczej. Najpierw zrzut, potem selekcja.</p>
+                                </div>
+                                <div class="flex flex-wrap gap-2">
+                                    <button @click="saveBrainDump()" class="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-bold text-white transition-colors hover:bg-slate-800">Zapisz</button>
+                                    <button @click="view = 'dash'" class="rounded-2xl bg-slate-100 px-4 py-3 text-sm font-bold text-slate-600 transition-colors hover:bg-slate-200">Wroc do fokusu</button>
+                                </div>
+                            </div>
+                        </section>
+
+                        <div class="grid gap-6 xl:grid-cols-[1.25fr_0.75fr]">
+                            <section class="card p-5 md:p-6">
+                                <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+                                    <div>
+                                        <p class="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400">Notatka</p>
+                                        <h3 class="mt-1 text-2xl font-black text-slate-900">Wrzuc wszystko, co lata po glowie</h3>
+                                    </div>
+                                    <span class="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-500" x-text="countBrainDumpLines() + ' linii'"></span>
+                                </div>
+
+                                <textarea x-model="brainDump" @input="handleBrainDumpInput()" rows="18" class="w-full rounded-[28px] border border-slate-200 bg-slate-50 p-5 text-sm leading-7 text-slate-700 outline-none transition-colors focus:border-emerald-300 focus:bg-white" placeholder="Np.
+- oddzwonic do...
+- ogarnac rachunek
+- pomysl na projekt
+- rzeczy na jutro
+"></textarea>
+
+                                <div class="mt-4 flex flex-wrap items-center justify-between gap-3">
+                                    <div class="text-sm text-slate-500">
+                                        <span>Ostatni zapis:</span>
+                                        <span class="font-bold text-slate-700" x-text="noteSavedAt ? formatNoteTimestamp(noteSavedAt) : 'jeszcze nie zapisano'"></span>
+                                    </div>
+                                    <div class="flex flex-wrap gap-2">
+                                        <button @click="brainDump = ''" class="rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-500 transition-colors hover:bg-slate-50">Wyczysc</button>
+                                        <button @click="saveBrainDump()" class="rounded-2xl bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white transition-colors hover:bg-emerald-700">Zapisz brain dump</button>
+                                    </div>
+                                </div>
+                            </section>
+
+                            <div class="space-y-4">
+                                <section class="card p-5">
+                                    <p class="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400">Zamien na zadania</p>
+                                    <h3 class="mt-1 text-2xl font-black text-slate-900">Przerzuc notatke do modulu</h3>
+                                    <p class="mt-3 text-sm leading-7 text-slate-500">Kazda niepusta linia stanie sie osobnym zadaniem w wybranym module.</p>
+
+                                    <div class="mt-4">
+                                        <label class="text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">Docelowy modul</label>
+                                        <select x-model="brainDumpTargetModuleId" class="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm font-bold">
+                                            <template x-for="module in modules" :key="module.id">
+                                                <option :value="String(module.id)" x-text="module.name"></option>
+                                            </template>
+                                        </select>
+                                    </div>
+
+                                    <button @click="sendBrainDumpToModule()" class="mt-4 w-full rounded-2xl bg-slate-900 px-4 py-3 text-sm font-bold text-white transition-colors hover:bg-slate-800">Wrzuc linie jako zadania</button>
+                                </section>
+
+                                <section class="card p-5">
+                                    <p class="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400">Jak tego uzywac</p>
+                                    <h3 class="mt-1 text-2xl font-black text-slate-900">Najprostszy rytual</h3>
+                                    <div class="mt-4 space-y-3 text-sm leading-7 text-slate-600">
+                                        <div class="rounded-[20px] bg-slate-50 px-4 py-4"><span class="font-black text-slate-900">1.</span> Gdy czujesz chaos, nie sortuj jeszcze niczego. Tylko dump.</div>
+                                        <div class="rounded-[20px] bg-slate-50 px-4 py-4"><span class="font-black text-slate-900">2.</span> Potem wrzuc linie do modulu albo przepisz tylko to, co jest realnym zadaniem.</div>
+                                        <div class="rounded-[20px] bg-slate-50 px-4 py-4"><span class="font-black text-slate-900">3.</span> Wroc na pulpit i wybierz jedna rzecz z sekcji `Zacznij od tego`.</div>
+                                    </div>
+                                </section>
+                            </div>
+                        </div>
+                    </div>
+                </template>
+
+                <template x-if="view === 'monthly'">
+                    <div x-cloak class="space-y-6">
+                        <section class="card p-5 md:p-6">
+                            <div class="flex flex-wrap items-start justify-between gap-4">
+                                <div>
+                                    <p class="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400">Zadania miesieczne</p>
+                                    <h2 class="mt-1 text-3xl font-black tracking-tight text-slate-900">Powtarzalne rzeczy, ktore resetuja sie co miesiac</h2>
+                                    <p class="mt-2 max-w-3xl text-sm leading-7 text-slate-500">Zaznaczasz wykonanie i dopisujesz krotka notatke. W nowym miesiacu lista startuje od nowa.</p>
+                                </div>
+                                <div class="flex flex-wrap gap-2">
+                                    <button @click="shiftMonthlyMonth(-1)" class="rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-500 transition-colors hover:bg-slate-50">←</button>
+                                    <div class="rounded-2xl bg-slate-100 px-4 py-2.5 text-sm font-black text-slate-700" x-text="formatMonthLabel(monthlyMonthKey)"></div>
+                                    <button @click="shiftMonthlyMonth(1)" class="rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-500 transition-colors hover:bg-slate-50">→</button>
+                                </div>
+                            </div>
+                        </section>
+
+                        <div class="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
+                            <section class="card p-5 md:p-6">
+                                <p class="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400">Nowe zadanie</p>
+                                <h3 class="mt-1 text-2xl font-black text-slate-900">Dodaj pozycje miesieczna</h3>
+                                <div class="mt-4 flex flex-col gap-3 md:flex-row">
+                                    <input x-model="newMonthlyTaskName" @keydown.enter.prevent="addMonthlyTask()" class="w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm font-bold outline-none transition-colors focus:border-emerald-300 focus:bg-white" placeholder="Np. oplacic ZUS, podsumowac wydatki..." />
+                                    <button @click="addMonthlyTask()" class="rounded-2xl bg-emerald-600 px-5 py-3 text-sm font-bold text-white transition-colors hover:bg-emerald-700">Dodaj</button>
+                                </div>
+                                <p class="mt-3 text-xs text-slate-500">Notatke dopiszesz przy kazdym zadaniu na liscie.</p>
+                            </section>
+
+                            <section class="card p-5 md:p-6">
+                                <p class="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400">Podsumowanie</p>
+                                <h3 class="mt-1 text-2xl font-black text-slate-900">Stan miesiaca</h3>
+                                <div class="mt-4 grid gap-3 sm:grid-cols-3">
+                                    <div class="rounded-[20px] bg-slate-100 px-4 py-4">
+                                        <div class="text-2xl font-black text-slate-800" x-text="monthlyTasks.length"></div>
+                                        <div class="mt-1 text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">Wszystkie</div>
+                                    </div>
+                                    <div class="rounded-[20px] bg-emerald-50 px-4 py-4">
+                                        <div class="text-2xl font-black text-emerald-700" x-text="getMonthlyDoneCount()"></div>
+                                        <div class="mt-1 text-[10px] font-black uppercase tracking-[0.16em] text-emerald-700/80">Zrobione</div>
+                                    </div>
+                                    <div class="rounded-[20px] bg-amber-50 px-4 py-4">
+                                        <div class="text-2xl font-black text-amber-700" x-text="getMonthlyOpenCount()"></div>
+                                        <div class="mt-1 text-[10px] font-black uppercase tracking-[0.16em] text-amber-700/80">Otwarte</div>
+                                    </div>
+                                </div>
+                            </section>
+                        </div>
+
+                        <section class="card p-5 md:p-6">
+                            <div class="mb-4 flex items-center justify-between gap-3">
+                                <h3 class="text-2xl font-black text-slate-900">Lista na ten miesiac</h3>
+                                <span class="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-500" x-text="monthlyMonthKey"></span>
+                            </div>
+
+                            <div class="space-y-3">
+                                <template x-for="task in monthlyTasks" :key="task.id">
+                                    <div class="rounded-[22px] border border-slate-200 bg-slate-50/80 p-4">
+                                        <div class="flex flex-wrap items-center justify-between gap-2">
+                                            <label class="flex items-center gap-3 text-sm font-bold text-slate-900">
+                                                <input type="checkbox" :checked="task.done" @change="toggleMonthlyTaskDone(task)" class="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500" />
+                                                <span :class="task.done ? 'line-through text-slate-400' : ''" x-text="task.name"></span>
+                                            </label>
+                                            <button @click="deleteMonthlyTask(task.id)" class="rounded-xl border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-bold text-rose-600 transition-colors hover:bg-rose-100">Usun</button>
+                                        </div>
+                                        <div class="mt-3">
+                                            <input x-model="task.note" @change="saveMonthlyTaskNote(task)" maxlength="240" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none transition-colors focus:border-emerald-300" placeholder="Krotka notatka do tego miesiaca (opcjonalnie)" />
+                                        </div>
+                                    </div>
+                                </template>
+
+                                <template x-if="monthlyTasks.length === 0">
+                                    <div class="rounded-[22px] border border-dashed border-slate-200 px-4 py-10 text-center text-sm text-slate-400">
+                                        Brak zadan miesiecznych. Dodaj pierwsze.
+                                    </div>
+                                </template>
+                            </div>
+                        </section>
+                    </div>
+                </template>
+
+                <template x-if="view === 'debts'">
+                    <div x-cloak class="space-y-6">
+                        <section class="card p-5 md:p-6">
+                            <div class="flex flex-wrap items-start justify-between gap-4">
+                                <div>
+                                    <p class="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400">Splaty</p>
+                                    <h2 class="mt-1 text-3xl font-black tracking-tight text-slate-900">Kontrola zobowiazan i rat</h2>
+                                    <p class="mt-2 max-w-3xl text-sm leading-7 text-slate-500">Dodajesz gdzie i ile masz do splaty, a aplikacja liczy sume calosci i miesieczna.</p>
+                                </div>
+                                <div class="grid gap-2 sm:grid-cols-2">
+                                    <div class="rounded-[20px] bg-slate-100 px-4 py-3">
+                                        <div class="text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">Suma calkowita</div>
+                                        <div class="mt-1 text-xl font-black text-slate-800" x-text="formatMoney(debtsSummary.total)"></div>
+                                    </div>
+                                    <div class="rounded-[20px] bg-emerald-50 px-4 py-3">
+                                        <div class="text-[10px] font-black uppercase tracking-[0.16em] text-emerald-700/80">Suma miesieczna</div>
+                                        <div class="mt-1 text-xl font-black text-emerald-700" x-text="formatMoney(debtsSummary.monthly)"></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+
+                        <section class="card p-5 md:p-6">
+                            <p class="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400">Nowa pozycja</p>
+                            <h3 class="mt-1 text-2xl font-black text-slate-900">Dodaj nowa splate</h3>
+                            <div class="mt-4 grid gap-3 md:grid-cols-2">
+                                <input x-model="newDebt.name" class="rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm font-bold outline-none transition-colors focus:border-emerald-300 focus:bg-white" placeholder="Co splacasz" />
+                                <input x-model="newDebt.place" class="rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm font-bold outline-none transition-colors focus:border-emerald-300 focus:bg-white" placeholder="Gdzie / u kogo" />
+                                <input type="number" min="0" step="0.01" x-model="newDebt.total_amount" class="rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm font-bold outline-none transition-colors focus:border-emerald-300 focus:bg-white" placeholder="Kwota calkowita" />
+                                <input type="number" min="0" step="0.01" x-model="newDebt.monthly_amount" class="rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm font-bold outline-none transition-colors focus:border-emerald-300 focus:bg-white" placeholder="Rata miesieczna" />
+                            </div>
+                            <textarea x-model="newDebt.note" rows="2" class="mt-3 w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm outline-none transition-colors focus:border-emerald-300 focus:bg-white" placeholder="Krotka notatka (opcjonalnie)"></textarea>
+                            <button @click="addDebt()" class="mt-3 rounded-2xl bg-emerald-600 px-5 py-3 text-sm font-bold text-white transition-colors hover:bg-emerald-700">Dodaj pozycje</button>
+                        </section>
+
+                        <section class="card p-5 md:p-6">
+                            <div class="mb-4 flex items-center justify-between gap-3">
+                                <h3 class="text-2xl font-black text-slate-900">Twoje splaty</h3>
+                                <span class="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-500" x-text="debtsSummary.count + ' pozycji'"></span>
+                            </div>
+                            <div class="space-y-3">
+                                <template x-for="debt in debts" :key="debt.id">
+                                    <div class="rounded-[22px] border border-slate-200 bg-slate-50/80 p-4">
+                                        <div class="flex flex-wrap items-start justify-between gap-3">
+                                            <div class="min-w-0">
+                                                <div class="text-sm font-black text-slate-900" x-text="debt.name"></div>
+                                                <div class="mt-1 text-xs text-slate-500" x-text="debt.place || 'bez miejsca'"></div>
+                                                <div x-show="debt.note" x-cloak class="mt-2 text-xs text-slate-600" x-text="debt.note"></div>
+                                            </div>
+                                            <button @click="deleteDebt(debt.id)" class="rounded-xl border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-bold text-rose-600 transition-colors hover:bg-rose-100">Usun</button>
+                                        </div>
+                                        <div class="mt-3 grid gap-2 sm:grid-cols-2">
+                                            <div class="rounded-xl bg-white px-3 py-2">
+                                                <div class="text-[10px] font-black uppercase tracking-[0.16em] text-slate-400">Calosc</div>
+                                                <div class="mt-1 text-sm font-bold text-slate-700" x-text="formatMoney(debt.total_amount)"></div>
+                                            </div>
+                                            <div class="rounded-xl bg-emerald-50 px-3 py-2">
+                                                <div class="text-[10px] font-black uppercase tracking-[0.16em] text-emerald-700/80">Miesiecznie</div>
+                                                <div class="mt-1 text-sm font-bold text-emerald-700" x-text="formatMoney(debt.monthly_amount)"></div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </template>
+
+                                <template x-if="debts.length === 0">
+                                    <div class="rounded-[22px] border border-dashed border-slate-200 px-4 py-10 text-center text-sm text-slate-400">
+                                        Brak pozycji splat. Dodaj pierwsza.
+                                    </div>
+                                </template>
+                            </div>
+                        </section>
+                    </div>
+                </template>
+
+                <template x-if="view === 'flow'">
+                    <div x-cloak class="flex min-h-[60vh] items-center justify-center">
+                        <template x-if="flowTask">
+                            <div class="card max-w-3xl border-2 border-emerald-400 p-8 text-center md:p-12">
+                                <p class="text-[11px] font-black uppercase tracking-[0.22em] text-emerald-700">Teraz robisz tylko to</p>
+                                <div class="mt-4 flex flex-wrap justify-center gap-2">
+                                    <span :class="getModuleTheme(flowTask.module_id).badge" class="rounded-full border px-3 py-1 text-xs font-bold" x-text="getModuleName(flowTask.module_id)"></span>
+                                    <span x-show="hasPriority(flowTask)" x-cloak :class="getPriorityBadgeClass(flowTask.priority)" class="rounded-full px-3 py-1 text-xs font-bold" x-text="getPriorityLabel(flowTask.priority)"></span>
+                                </div>
+                                <h2 class="mt-6 text-3xl font-black leading-tight text-slate-900 md:text-5xl" x-text="flowTask.name"></h2>
+                                <div class="mt-8 text-6xl font-black text-slate-800 md:text-7xl" x-text="formatTime(flowTimer)"></div>
+                                <p class="mt-4 text-sm leading-7 text-slate-500">Nie wybieraj niczego nowego, dopoki ten timer nie dojdzie do konca albo nie klikniesz `zrobione`.</p>
+                                <div class="mt-8 flex flex-wrap justify-center gap-3">
+                                    <button @click="completeFlowTask()" class="rounded-2xl bg-emerald-600 px-8 py-4 text-lg font-black text-white shadow-[0_16px_30px_rgba(5,150,105,0.28)] transition-colors hover:bg-emerald-700">Zrobione</button>
+                                    <button @click="skipFlowTask()" class="rounded-2xl border border-slate-200 bg-white px-8 py-4 text-lg font-bold text-slate-500 transition-colors hover:bg-slate-50">Pomin</button>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                </template>
+            </main>
+        </div>
+
+        <button @click="openNewTaskModal(activeModule ? activeModule.id : null)" class="fixed bottom-4 right-4 z-40 rounded-full bg-emerald-600 px-5 py-3 text-sm font-black text-white shadow-[0_12px_24px_rgba(5,150,105,0.28)] transition-colors hover:bg-emerald-700 md:hidden">
+            + Zadanie
+        </button>
+
+        <div x-show="taskModal" x-cloak class="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-slate-900/40 p-3 backdrop-blur-sm md:items-center md:p-4">
+            <div class="card relative w-full max-w-xl max-h-[94vh] overflow-y-auto p-5 md:p-8" @click.away="taskModal = false; isCreatingTask = false">
+                <p class="mb-2 text-[10px] font-black uppercase tracking-[0.2em] text-slate-400" x-text="isCreatingTask ? 'Nowe zadanie' : 'Edycja zadania'"></p>
+                <input x-model="editingTask.name" class="mb-6 w-full border-b border-slate-100 bg-transparent pb-3 text-2xl font-black text-slate-900 outline-none transition-colors focus:border-emerald-500">
+
+                <div class="mb-6 grid grid-cols-1 gap-4 md:grid-cols-4">
+                    <div>
+                        <label class="text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">Modul</label>
+                        <select x-model.number="editingTask.module_id" class="mt-1 w-full rounded-2xl border bg-slate-50 p-3 text-sm font-bold">
+                            <template x-for="module in modules" :key="module.id">
+                                <option :value="module.id" x-text="module.name"></option>
+                            </template>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">Priorytet (opcjonalnie)</label>
+                        <select x-model="editingTask.priority" class="mt-1 w-full rounded-2xl border bg-slate-50 p-3 text-sm font-bold">
+                            <option value="">Brak priorytetu</option>
+                            <option value="P1">P1 - Pilne</option>
+                            <option value="P2">P2 - Normalne</option>
+                            <option value="P3">P3 - Spokojne</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">Czas</label>
+                        <input type="number" x-model.number="editingTask.estimated_time" class="mt-1 w-full rounded-2xl border bg-slate-50 p-3 text-sm font-bold">
+                    </div>
+                    <div>
+                        <label class="text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">Termin</label>
+                        <input type="date" x-ref="taskDueDateInput" x-model="editingTask.due_date" @change="editingTask.due_date = $event.target.value" @input="editingTask.due_date = $event.target.value" class="mt-1 w-full rounded-2xl border bg-slate-50 p-3 text-[11px] font-bold">
+                    </div>
+                </div>
+
+                <div class="mb-6">
+                    <label class="text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">Status</label>
+                    <select x-model="editingTask.status" class="mt-1 w-full rounded-2xl border bg-slate-50 p-3 text-sm font-bold">
+                        <option value="oczekujace">Oczekujace</option>
+                        <option value="analiza">Analiza</option>
+                        <option value="wstepne">Wstepne</option>
+                        <option value="todo">Teraz robie</option>
+                        <option value="gotowe">Gotowe</option>
+                    </select>
+                </div>
+
+                <textarea x-model="editingTask.description" rows="4" class="mb-6 w-full rounded-[24px] border bg-slate-50 p-4 text-sm outline-none transition-colors focus:border-emerald-500" placeholder="Notatki..."></textarea>
+
+                <div x-show="editingTask.id" x-cloak class="mb-8 rounded-[24px] border border-fuchsia-100 bg-fuchsia-50 p-4">
+                    <div class="mb-2 flex items-center gap-2">
+                        <span class="text-lg">AI</span>
+                        <h4 class="text-[10px] font-black uppercase tracking-[0.22em] text-fuchsia-700">Shredder</h4>
+                    </div>
+                    <button @click="shredTask()" class="w-full rounded-2xl bg-fuchsia-600 py-3 text-xs font-bold text-white transition-colors hover:bg-fuchsia-700" :disabled="isShredding">
+                        <span x-show="!isShredding">Rozbij na mniejsze kroki</span>
+                        <span x-show="isShredding">Pracuje... to potrwa chwile</span>
+                    </button>
+                </div>
+
+                <div class="flex flex-wrap items-center justify-between gap-3">
+                    <button x-show="editingTask.id" x-cloak @click="removeEditingTask()" class="rounded-2xl px-4 py-2 text-xs font-bold text-red-500 transition-colors hover:bg-red-50 hover:text-red-700">Usun zadanie</button>
+                    <div class="flex gap-3">
+                        <button @click="taskModal = false; isCreatingTask = false" class="rounded-2xl px-4 py-2 text-xs font-bold text-slate-400">Anuluj</button>
+                        <button @click="saveTask()" class="rounded-2xl bg-emerald-600 px-8 py-3 text-xs font-bold text-white shadow-[0_12px_24px_rgba(5,150,105,0.22)]">Zapisz</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
