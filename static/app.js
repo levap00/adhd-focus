@@ -4,10 +4,11 @@
                 modules: [],
                 tasks: [],
                 activeModule: null,
-                calmMode: true,
+                calmMode: false,
                 theme: 'light',
                 sidebarCollapsed: false,
                 focusFilter: 'all',
+                dopamineWeekOffset: 0,
                 taskScope: 'all',
                 moduleOrder: [],
                 dailyGoal: 5,
@@ -32,6 +33,7 @@
                 monthlyMonthKey: '',
                 monthlyTasks: [],
                 newMonthlyTaskName: '',
+                newMonthlyTaskDueDay: '',
                 debts: [],
                 debtsSummary: { count: 0, total: 0, monthly: 0 },
                 newDebt: {
@@ -42,6 +44,8 @@
                     note: ''
                 },
                 draggedTaskId: null,
+                moduleNotes: {},
+                moduleNoteTimers: {},
                 globalLaneCollapsed: {},
                 uiPrefsKey: 'adhd-focus-ui-v1',
                 weekLabels: ['Pon', 'Wt', 'Sr', 'Czw', 'Pt', 'Sob', 'Nd'],
@@ -111,6 +115,7 @@
                         this.loadMonthlyTasks(),
                         this.loadDebts()
                     ]);
+                    await this.loadModuleNotes();
 
                     if (!this.activeModule && this.modules.length > 0) {
                         this.activeModule = this.getSidebarModules()[0] || this.modules[0];
@@ -131,10 +136,11 @@
                         const raw = localStorage.getItem(this.uiPrefsKey);
                         if (!raw) return;
                         const parsed = JSON.parse(raw);
-                        this.calmMode = parsed.calmMode ?? this.calmMode;
+                        this.calmMode = false;
                         this.theme = parsed.theme === 'dark' ? 'dark' : 'light';
                         this.sidebarCollapsed = parsed.sidebarCollapsed ?? this.sidebarCollapsed;
                         this.focusFilter = parsed.focusFilter ?? this.focusFilter;
+                        this.dopamineWeekOffset = Number.isFinite(Number(parsed.dopamineWeekOffset)) ? Number(parsed.dopamineWeekOffset) : this.dopamineWeekOffset;
                         this.moduleOrder = Array.isArray(parsed.moduleOrder) ? parsed.moduleOrder.map(Number).filter(Number.isFinite) : this.moduleOrder;
                         this.dailyGoal = Number.isFinite(Number(parsed.dailyGoal)) && Number(parsed.dailyGoal) > 0 ? Number(parsed.dailyGoal) : this.dailyGoal;
                     } catch (error) {
@@ -145,21 +151,16 @@
                 saveUIPreferences() {
                     try {
                         localStorage.setItem(this.uiPrefsKey, JSON.stringify({
-                            calmMode: this.calmMode,
                             theme: this.theme,
                             sidebarCollapsed: this.sidebarCollapsed,
                             focusFilter: this.focusFilter,
                             moduleOrder: this.moduleOrder,
-                            dailyGoal: this.dailyGoal
+                            dailyGoal: this.dailyGoal,
+                            dopamineWeekOffset: this.dopamineWeekOffset
                         }));
                     } catch (error) {
                         /* ignore storage write errors */
                     }
-                },
-
-                toggleCalmMode() {
-                    this.calmMode = !this.calmMode;
-                    this.saveUIPreferences();
                 },
 
                 toggleTheme() {
@@ -335,6 +336,26 @@
                     this.debtsSummary = payload.summary || { count: 0, total: 0, monthly: 0 };
                 },
 
+                async loadModuleNotes() {
+                    if (!Array.isArray(this.modules) || this.modules.length === 0) {
+                        this.moduleNotes = {};
+                        return;
+                    }
+
+                    const entries = await Promise.all(this.modules.map(async module => {
+                        try {
+                            const res = await fetch(`${this.API}/notes/module-${module.id}`);
+                            if (!res.ok) return [module.id, this.moduleNotes[module.id] || ''];
+                            const payload = await res.json();
+                            return [module.id, payload.content || ''];
+                        } catch (error) {
+                            return [module.id, this.moduleNotes[module.id] || ''];
+                        }
+                    }));
+
+                    this.moduleNotes = Object.fromEntries(entries);
+                },
+
                 getTodayKey() {
                     return this.dateToKey(new Date());
                 },
@@ -402,6 +423,30 @@
                         minimumFractionDigits: 2,
                         maximumFractionDigits: 2
                     }).format(Number(value || 0));
+                },
+
+                normalizeMonthlyDueDay(value) {
+                    const day = Math.round(Number(value || 0));
+                    if (!Number.isFinite(day) || day <= 0) return 0;
+                    return Math.min(31, day);
+                },
+
+                getMonthlyDueLabel(task) {
+                    const dueDay = this.normalizeMonthlyDueDay(task?.due_day);
+                    if (!dueDay) return 'bez dnia';
+                    return `do ${dueDay}. dnia miesiaca`;
+                },
+
+                getMonthlyDueBadgeClass(task) {
+                    const dueDay = this.normalizeMonthlyDueDay(task?.due_day);
+                    if (!dueDay || task?.done) return 'bg-slate-100 text-slate-500';
+                    const today = new Date();
+                    const currentMonth = this.getCurrentMonthKey();
+                    if ((this.monthlyMonthKey || currentMonth) !== currentMonth) return 'bg-cyan-50 text-cyan-700';
+                    const daysLeft = dueDay - today.getDate();
+                    if (daysLeft < 0) return 'bg-red-50 text-red-600';
+                    if (daysLeft <= 2) return 'bg-amber-50 text-amber-700';
+                    return 'bg-cyan-50 text-cyan-700';
                 },
 
                 getMonthlyDoneCount() {
@@ -753,8 +798,26 @@
                     return Math.min(100, Math.round((this.getTodayDoneCount() / this.dailyGoal) * 100));
                 },
 
+                getDailyRewardLabel() {
+                    const done = this.getTodayDoneCount();
+                    if (done <= 0) return 'Pierwszy ruch odpala dzien';
+                    if (done >= this.dailyGoal) return 'Cel dnia zamkniety';
+                    const left = Math.max(0, this.dailyGoal - done);
+                    return left === 1 ? 'Jeszcze 1 i cel siada' : `Jeszcze ${left} do celu`;
+                },
+
+                getWeeklyDoneTotal() {
+                    const today = this.shiftDateKey(this.getTodayKey(), this.dopamineWeekOffset * 7);
+                    let total = 0;
+                    for (let offset = 0; offset < 7; offset++) {
+                        total += this.getDoneCountByDate(this.shiftDateKey(today, -offset));
+                    }
+                    return total;
+                },
+
                 getWeeklyGoalDots() {
-                    const today = this.getTodayKey();
+                    const realToday = this.getTodayKey();
+                    const today = this.shiftDateKey(realToday, this.dopamineWeekOffset * 7);
                     const dots = [];
                     for (let offset = 6; offset >= 0; offset--) {
                         const dateKey = this.shiftDateKey(today, -offset);
@@ -767,7 +830,7 @@
                             done,
                             ratio,
                             percent,
-                            isToday: dateKey === today,
+                            isToday: dateKey === realToday,
                             weekday: new Intl.DateTimeFormat('pl-PL', { weekday: 'short' }).format(date),
                             dayNumber: date.getDate()
                         });
@@ -775,11 +838,65 @@
                     return dots;
                 },
 
+                shiftDopamineWeek(step) {
+                    this.dopamineWeekOffset += step;
+                    this.saveUIPreferences();
+                },
+
+                resetDopamineWeek() {
+                    this.dopamineWeekOffset = 0;
+                    this.saveUIPreferences();
+                },
+
+                getDopamineWeekLabel() {
+                    if (this.dopamineWeekOffset === 0) return 'ten tydzien';
+                    if (this.dopamineWeekOffset === -1) return 'poprzedni tydzien';
+                    if (this.dopamineWeekOffset === 1) return 'nastepny tydzien';
+                    return this.dopamineWeekOffset < 0
+                        ? `${Math.abs(this.dopamineWeekOffset)} tyg. temu`
+                        : `za ${this.dopamineWeekOffset} tyg.`;
+                },
+
+                getDopamineDotClass(done) {
+                    if (done >= this.dailyGoal) return 'dopamine-dot-full';
+                    if (done >= Math.max(1, Math.ceil(this.dailyGoal * 0.6))) return 'dopamine-dot-good';
+                    if (done > 0) return 'dopamine-dot-low';
+                    return 'dopamine-dot-empty';
+                },
+
                 getGoalDotRingClass(percent) {
                     if (percent >= 100) return 'kpi-ring-full';
                     if (percent >= 60) return 'kpi-ring-good';
                     if (percent > 0) return 'kpi-ring-low';
                     return 'kpi-ring-empty';
+                },
+
+                getModuleNote(moduleId) {
+                    return this.moduleNotes[moduleId] || '';
+                },
+
+                setModuleNote(moduleId, value) {
+                    this.moduleNotes = {
+                        ...this.moduleNotes,
+                        [moduleId]: value
+                    };
+                    this.saveModuleNote(moduleId);
+                },
+
+                saveModuleNote(moduleId) {
+                    if (!moduleId) return;
+                    clearTimeout(this.moduleNoteTimers[moduleId]);
+                    this.moduleNoteTimers[moduleId] = setTimeout(async () => {
+                        try {
+                            await fetch(`${this.API}/notes/module-${moduleId}`, {
+                                method: 'PUT',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ content: this.moduleNotes[moduleId] || '' })
+                            });
+                        } catch (error) {
+                            /* keep local text if saving fails */
+                        }
+                    }, 450);
                 },
 
                 getTaskDescriptionPreview(task, maxWords = 8) {
@@ -1266,6 +1383,19 @@
                     this.view = module ? 'kanban' : 'dash';
                 },
 
+                async getApiErrorMessage(response, fallback) {
+                    if (response.status === 404) {
+                        return 'Endpoint nie znaleziony. Otworz aplikacje przez backend (http://127.0.0.1:8000) i odswiez strone, zeby formularze trafialy do API.';
+                    }
+                    try {
+                        const payload = await response.json();
+                        if (payload?.detail && payload.detail !== 'Not Found') return payload.detail;
+                    } catch (error) {
+                        /* response was not JSON */
+                    }
+                    return fallback;
+                },
+
                 async addMonthlyTask() {
                     const name = (this.newMonthlyTaskName || '').trim();
                     if (!name) {
@@ -1276,15 +1406,44 @@
                     const response = await fetch(`${this.API}/monthly-tasks`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ name })
+                        body: JSON.stringify({
+                            name,
+                            due_day: this.normalizeMonthlyDueDay(this.newMonthlyTaskDueDay)
+                        })
                     });
 
                     if (!response.ok) {
-                        alert('Nie udalo sie dodac zadania miesiecznego.');
+                        alert(await this.getApiErrorMessage(response, 'Nie udalo sie dodac zadania miesiecznego.'));
                         return;
                     }
 
                     this.newMonthlyTaskName = '';
+                    this.newMonthlyTaskDueDay = '';
+                    await this.loadMonthlyTasks();
+                },
+
+                async saveMonthlyTaskDetails(task) {
+                    if (!task) return;
+                    const name = (task.name || '').trim();
+                    if (!name) {
+                        alert('Nazwa zadania miesiecznego nie moze byc pusta.');
+                        await this.loadMonthlyTasks();
+                        return;
+                    }
+
+                    const response = await fetch(`${this.API}/monthly-tasks/${task.id}`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            name,
+                            due_day: this.normalizeMonthlyDueDay(task.due_day)
+                        })
+                    });
+
+                    if (!response.ok) {
+                        alert(await this.getApiErrorMessage(response, 'Nie udalo sie zapisac zadania miesiecznego.'));
+                    }
+
                     await this.loadMonthlyTasks();
                 },
 
@@ -1360,7 +1519,7 @@
                     });
 
                     if (!response.ok) {
-                        alert('Nie udalo sie dodac pozycji splaty.');
+                        alert(await this.getApiErrorMessage(response, 'Nie udalo sie dodac pozycji splaty.'));
                         return;
                     }
 

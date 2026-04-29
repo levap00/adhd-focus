@@ -34,10 +34,12 @@ class NotePayload(BaseModel):
 
 class MonthlyTaskCreate(BaseModel):
     name: str
+    due_day: int = 0
 
 
 class MonthlyTaskUpdate(BaseModel):
     name: str
+    due_day: int = 0
 
 
 class MonthlyTaskStatePayload(BaseModel):

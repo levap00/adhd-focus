@@ -27,12 +27,60 @@
                     </div>
 
                     <div class="flex flex-wrap gap-2">
-                        <button @click="toggleCalmMode()" class="rounded-xl border border-slate-300/80 bg-white/80 px-3 py-2 text-xs font-bold text-slate-600 transition-colors hover:bg-slate-100" x-text="calmMode ? 'Spokojny ON' : 'Spokojny OFF'"></button>
                         <button @click="toggleTheme()" class="rounded-xl border border-slate-300/80 bg-white/80 px-3 py-2 text-xs font-bold text-slate-600 transition-colors hover:bg-slate-100" x-text="theme === 'dark' ? 'Jasny motyw' : 'Ciemny motyw'"></button>
                         <button @click="view = 'brain'" class="rounded-xl border border-slate-300/80 bg-white/80 px-3 py-2 text-xs font-bold text-slate-600 transition-colors hover:bg-slate-100">Brain dump</button>
                         <button @click="openNewTaskModal()" class="rounded-xl border border-slate-300/80 bg-white/90 px-3 py-2 text-xs font-bold text-slate-700 transition-colors hover:bg-slate-100">+ Zadanie</button>
                         <button @click="addModulePrompt('praca')" class="rounded-xl bg-slate-900 px-3 py-2 text-xs font-bold text-white transition-colors hover:bg-slate-800">+ Modul</button>
                         <button @click="startFlow()" class="rounded-xl bg-emerald-600 px-3 py-2 text-xs font-bold text-white transition-colors hover:bg-emerald-700">Flow</button>
+                    </div>
+                </div>
+
+                <div class="topbar-progress mt-3 grid gap-3 lg:grid-cols-[minmax(260px,0.9fr)_minmax(420px,1.1fr)]">
+                    <div class="rounded-2xl border border-slate-200/80 bg-white/70 p-3">
+                        <div class="flex items-center justify-between gap-3">
+                            <div>
+                                <p class="text-[10px] font-black uppercase tracking-[0.2em] text-emerald-700">Dzisiaj</p>
+                                <div class="mt-1 text-lg font-black text-slate-900">
+                                    <span x-text="getTodayDoneCount()"></span>
+                                    <span class="text-slate-400">/</span>
+                                    <span x-text="dailyGoal"></span>
+                                    <span class="text-sm text-slate-500">zrobione</span>
+                                </div>
+                            </div>
+                            <button @click="setDailyGoalPrompt()" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-500 transition-colors hover:bg-slate-50">Cel</button>
+                        </div>
+                        <div class="mt-3 h-3 overflow-hidden rounded-full bg-slate-200/80">
+                            <div class="daily-progress-fill h-full rounded-full transition-all duration-700" :style="`width: ${getDailyProgressPercent()}%`"></div>
+                        </div>
+                        <div class="mt-2 flex items-center justify-between gap-3 text-xs font-bold">
+                            <span class="text-slate-500" x-text="getDailyRewardLabel()"></span>
+                            <span class="text-emerald-700" x-text="getDailyProgressPercent() + '%'"></span>
+                        </div>
+                    </div>
+
+                    <div class="rounded-2xl border border-slate-200/80 bg-white/70 p-3">
+                        <div class="mb-2 flex items-center justify-between gap-3">
+                            <div>
+                                <p class="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">Tydzien dopaminy</p>
+                                <p class="mt-1 text-xs font-bold text-slate-500" x-text="getDopamineWeekLabel()"></p>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <button @click="shiftDopamineWeek(-1)" class="h-8 w-8 rounded-full border border-slate-200 bg-white text-xs font-black text-slate-500 transition-colors hover:bg-slate-50">←</button>
+                                <button @click="resetDopamineWeek()" class="rounded-full bg-emerald-50 px-3 py-1 text-xs font-black text-emerald-700" x-text="getWeeklyDoneTotal() + ' zrobione'"></button>
+                                <button @click="shiftDopamineWeek(1)" class="h-8 w-8 rounded-full border border-slate-200 bg-white text-xs font-black text-slate-500 transition-colors hover:bg-slate-50">→</button>
+                            </div>
+                        </div>
+                        <div class="kpi-week-grid">
+                            <template x-for="day in getWeeklyGoalDots()" :key="day.dateKey">
+                                <div :class="day.isToday ? 'kpi-day-today' : ''" class="dopamine-day-card">
+                                    <div class="text-[10px] font-black uppercase text-slate-400" x-text="day.weekday"></div>
+                                    <div :class="getDopamineDotClass(day.done)" class="dopamine-dot mt-1">
+                                        <span x-text="day.done"></span>
+                                    </div>
+                                    <div class="mt-1 text-[10px] font-black text-slate-500" x-text="day.dayNumber"></div>
+                                </div>
+                            </template>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -311,6 +359,8 @@
                                             <div class="h-full rounded-full transition-all duration-500" :class="getModuleTheme(module.id).bar" :style="`width: ${module.progress || 0}%`"></div>
                                         </div>
 
+                                        <textarea :value="getModuleNote(module.id)" @input="setModuleNote(module.id, $event.target.value)" rows="2" class="mt-4 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm leading-6 text-slate-700 outline-none transition-colors focus:border-emerald-300" placeholder="Notatki do modulu"></textarea>
+
                                         <div class="mt-4 space-y-2">
                                             <template x-for="task in getModulePreviewTasks(module.id, 3)" :key="task.id">
                                                 <button @click="openTaskModal(task)" :class="`priority-${task.priority}`" class="flex w-full items-start justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-3 py-3 text-left transition-colors hover:bg-slate-50">
@@ -395,6 +445,10 @@
                                         <button @click="toggleGlobalLane(module.id)" class="rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-500 transition-colors hover:bg-slate-50" x-text="isGlobalLaneCollapsed(module.id) ? 'Pokaz kolumny' : 'Zwin modul'"></button>
                                         <button @click="openModule(module)" class="rounded-2xl bg-slate-900 px-4 py-2.5 text-sm font-bold text-white transition-colors hover:bg-slate-800">Otworz modul</button>
                                     </div>
+                                </div>
+
+                                <div class="mt-4">
+                                    <textarea :value="getModuleNote(module.id)" @input="setModuleNote(module.id, $event.target.value)" rows="2" class="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm leading-6 text-slate-700 outline-none transition-colors focus:border-emerald-300" placeholder="Notatki do modulu"></textarea>
                                 </div>
 
                                 <template x-if="!isGlobalLaneCollapsed(module.id)">
@@ -489,6 +543,12 @@
                                     <div class="mt-1 text-2xl font-black text-red-500" x-text="getFilteredPriorityCountForModule('P1')"></div>
                                 </div>
                             </div>
+
+                            <template x-if="taskScope === 'module' && activeModule">
+                                <div class="mt-4">
+                                    <textarea :value="getModuleNote(activeModule.id)" @input="setModuleNote(activeModule.id, $event.target.value)" rows="2" class="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm leading-6 text-slate-700 outline-none transition-colors focus:border-emerald-300" placeholder="Notatki do tego modulu"></textarea>
+                                </div>
+                            </template>
 
                         </section>
 
@@ -702,11 +762,12 @@
                             <section class="card p-5 md:p-6">
                                 <p class="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400">Nowe zadanie</p>
                                 <h3 class="mt-1 text-2xl font-black text-slate-900">Dodaj pozycje miesieczna</h3>
-                                <div class="mt-4 flex flex-col gap-3 md:flex-row">
+                                <div class="mt-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_160px_auto]">
                                     <input x-model="newMonthlyTaskName" @keydown.enter.prevent="addMonthlyTask()" class="w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm font-bold outline-none transition-colors focus:border-emerald-300 focus:bg-white" placeholder="Np. oplacic ZUS, podsumowac wydatki..." />
+                                    <input type="number" min="1" max="31" x-model="newMonthlyTaskDueDay" @keydown.enter.prevent="addMonthlyTask()" class="w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm font-bold outline-none transition-colors focus:border-emerald-300 focus:bg-white" placeholder="Dzien mies." />
                                     <button @click="addMonthlyTask()" class="rounded-2xl bg-emerald-600 px-5 py-3 text-sm font-bold text-white transition-colors hover:bg-emerald-700">Dodaj</button>
                                 </div>
-                                <p class="mt-3 text-xs text-slate-500">Notatke dopiszesz przy kazdym zadaniu na liscie.</p>
+                                <p class="mt-3 text-xs text-slate-500">Dzien 1-31 jest terminem w kazdym miesiacu. Notatke dopiszesz przy zadaniu na liscie.</p>
                             </section>
 
                             <section class="card p-5 md:p-6">
@@ -738,14 +799,21 @@
                             <div class="space-y-3">
                                 <template x-for="task in monthlyTasks" :key="task.id">
                                     <div class="rounded-[22px] border border-slate-200 bg-slate-50/80 p-4">
-                                        <div class="flex flex-wrap items-center justify-between gap-2">
-                                            <label class="flex items-center gap-3 text-sm font-bold text-slate-900">
+                                        <div class="flex flex-wrap items-start justify-between gap-2">
+                                            <label class="flex min-w-0 items-start gap-3 text-sm font-bold text-slate-900">
                                                 <input type="checkbox" :checked="task.done" @change="toggleMonthlyTaskDone(task)" class="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500" />
-                                                <span :class="task.done ? 'line-through text-slate-400' : ''" x-text="task.name"></span>
+                                                <span class="min-w-0">
+                                                    <span class="block" :class="task.done ? 'line-through text-slate-400' : ''" x-text="task.name"></span>
+                                                    <span :class="getMonthlyDueBadgeClass(task)" class="mt-1 inline-flex rounded-full px-2.5 py-1 text-[11px] font-bold" x-text="getMonthlyDueLabel(task)"></span>
+                                                </span>
                                             </label>
                                             <button @click="deleteMonthlyTask(task.id)" class="rounded-xl border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-bold text-rose-600 transition-colors hover:bg-rose-100">Usun</button>
                                         </div>
-                                        <div class="mt-3">
+                                        <div class="mt-3 grid gap-2 md:grid-cols-[minmax(0,1fr)_150px]">
+                                            <input x-model="task.name" @change="saveMonthlyTaskDetails(task)" maxlength="120" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-700 outline-none transition-colors focus:border-emerald-300" placeholder="Nazwa zadania" />
+                                            <input type="number" min="1" max="31" x-model="task.due_day" @change="saveMonthlyTaskDetails(task)" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-700 outline-none transition-colors focus:border-emerald-300" placeholder="Dzien mies." />
+                                        </div>
+                                        <div class="mt-2">
                                             <input x-model="task.note" @change="saveMonthlyTaskNote(task)" maxlength="240" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none transition-colors focus:border-emerald-300" placeholder="Krotka notatka do tego miesiaca (opcjonalnie)" />
                                         </div>
                                     </div>

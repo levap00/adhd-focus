@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from backend.db import get_db
 from backend.schemas import MonthlyTaskCreate, MonthlyTaskStatePayload, MonthlyTaskUpdate
-from backend.utils import normalize_month_key, utc_now_iso
+from backend.utils import normalize_month_key, parse_non_negative_int, utc_now_iso
 
 router = APIRouter()
 
@@ -16,6 +16,7 @@ def get_monthly_tasks(month: str = Query(default="")):
             SELECT
                 mt.id,
                 mt.name,
+                COALESCE(mt.due_day, 0) AS due_day,
                 mt.created_at,
                 mt.updated_at,
                 COALESCE(ms.done, 0) AS done,
@@ -56,16 +57,17 @@ def add_monthly_task(payload: MonthlyTaskCreate):
     name = (payload.name or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="Nazwa zadania miesiecznego nie moze byc pusta")
+    due_day = min(31, parse_non_negative_int(payload.due_day))
 
     now = utc_now_iso()
     with get_db() as conn:
         cur = conn.execute(
-            "INSERT INTO monthly_tasks (name, created_at, updated_at) VALUES (?, ?, ?)",
-            (name, now, now),
+            "INSERT INTO monthly_tasks (name, due_day, created_at, updated_at) VALUES (?, ?, ?, ?)",
+            (name, due_day, now, now),
         )
         conn.commit()
 
-    return {"id": cur.lastrowid, "name": name, "created_at": now, "updated_at": now}
+    return {"id": cur.lastrowid, "name": name, "due_day": due_day, "created_at": now, "updated_at": now}
 
 
 @router.put("/monthly-tasks/{task_id}")
@@ -73,6 +75,7 @@ def update_monthly_task(task_id: int, payload: MonthlyTaskUpdate):
     name = (payload.name or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="Nazwa zadania miesiecznego nie moze byc pusta")
+    due_day = min(31, parse_non_negative_int(payload.due_day))
 
     now = utc_now_iso()
     with get_db() as conn:
@@ -81,12 +84,12 @@ def update_monthly_task(task_id: int, payload: MonthlyTaskUpdate):
             raise HTTPException(status_code=404, detail="Zadanie miesieczne nie znalezione")
 
         conn.execute(
-            "UPDATE monthly_tasks SET name = ?, updated_at = ? WHERE id = ?",
-            (name, now, task_id),
+            "UPDATE monthly_tasks SET name = ?, due_day = ?, updated_at = ? WHERE id = ?",
+            (name, due_day, now, task_id),
         )
         conn.commit()
 
-    return {"status": "updated", "id": task_id, "name": name, "updated_at": now}
+    return {"status": "updated", "id": task_id, "name": name, "due_day": due_day, "updated_at": now}
 
 
 @router.delete("/monthly-tasks/{task_id}")
