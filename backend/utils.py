@@ -2,7 +2,11 @@ import re
 from datetime import datetime, timezone
 from typing import Optional
 
-ALLOWED_STATUSES = {"oczekujace", "analiza", "wstepne", "todo", "gotowe"}
+STATUS_ALIASES = {
+    "analiza": "przygotowanie",
+    "wstepne": "przygotowanie",
+}
+ALLOWED_STATUSES = {"oczekujace", "przygotowanie", "todo", "gotowe"}
 
 
 
@@ -20,6 +24,7 @@ def normalize_priority(raw: Optional[str]) -> str:
 
 def normalize_status(raw: Optional[str]) -> str:
     value = (raw or "oczekujace").strip().lower()
+    value = STATUS_ALIASES.get(value, value)
     return value if value in ALLOWED_STATUSES else "oczekujace"
 
 

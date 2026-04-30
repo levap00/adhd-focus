@@ -91,11 +91,27 @@ def init_db() -> None:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
                 place TEXT NOT NULL DEFAULT '',
+                kind TEXT NOT NULL DEFAULT 'debt',
                 total_amount REAL NOT NULL DEFAULT 0,
                 monthly_amount REAL NOT NULL DEFAULT 0,
+                due_day INTEGER NOT NULL DEFAULT 0,
                 note TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL DEFAULT '',
                 updated_at TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS debt_payment_states (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                debt_id INTEGER NOT NULL,
+                month_key TEXT NOT NULL,
+                done INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL DEFAULT '',
+                UNIQUE(debt_id, month_key),
+                FOREIGN KEY (debt_id) REFERENCES debts(id) ON DELETE CASCADE
             )
             """
         )
@@ -111,27 +127,38 @@ def init_db() -> None:
         _ensure_column(conn, "monthly_task_states", "note", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "monthly_task_states", "updated_at", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "debts", "place", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "debts", "kind", "TEXT NOT NULL DEFAULT 'debt'")
         _ensure_column(conn, "debts", "total_amount", "REAL NOT NULL DEFAULT 0")
         _ensure_column(conn, "debts", "monthly_amount", "REAL NOT NULL DEFAULT 0")
+        _ensure_column(conn, "debts", "due_day", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(conn, "debts", "note", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "debts", "created_at", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "debts", "updated_at", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "debt_payment_states", "done", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "debt_payment_states", "updated_at", "TEXT NOT NULL DEFAULT ''")
 
         conn.execute("UPDATE modules SET category = 'praca' WHERE category IS NULL OR TRIM(category) = ''")
         conn.execute("UPDATE tasks SET priority = '' WHERE priority IS NULL")
         conn.execute("UPDATE tasks SET description = '' WHERE description IS NULL")
         conn.execute("UPDATE tasks SET due_date = '' WHERE due_date IS NULL")
         conn.execute("UPDATE tasks SET estimated_time = 0 WHERE estimated_time IS NULL")
+        conn.execute("UPDATE tasks SET status = 'przygotowanie' WHERE status IN ('analiza', 'wstepne')")
         conn.execute("UPDATE monthly_tasks SET due_day = 0 WHERE due_day IS NULL")
         conn.execute("UPDATE monthly_tasks SET created_at = '' WHERE created_at IS NULL")
         conn.execute("UPDATE monthly_tasks SET updated_at = '' WHERE updated_at IS NULL")
         conn.execute("UPDATE monthly_task_states SET note = '' WHERE note IS NULL")
         conn.execute("UPDATE monthly_task_states SET updated_at = '' WHERE updated_at IS NULL")
         conn.execute("UPDATE debts SET place = '' WHERE place IS NULL")
+        conn.execute("UPDATE debts SET kind = 'debt' WHERE kind IS NULL OR TRIM(kind) = ''")
+        conn.execute("UPDATE debts SET kind = 'fixed' WHERE kind IN ('cost', 'fixed_cost', 'koszt')")
+        conn.execute("UPDATE debts SET kind = 'debt' WHERE kind NOT IN ('debt', 'fixed')")
         conn.execute("UPDATE debts SET total_amount = 0 WHERE total_amount IS NULL")
         conn.execute("UPDATE debts SET monthly_amount = 0 WHERE monthly_amount IS NULL")
+        conn.execute("UPDATE debts SET due_day = 0 WHERE due_day IS NULL")
         conn.execute("UPDATE debts SET note = '' WHERE note IS NULL")
         conn.execute("UPDATE debts SET created_at = '' WHERE created_at IS NULL")
         conn.execute("UPDATE debts SET updated_at = '' WHERE updated_at IS NULL")
+        conn.execute("UPDATE debt_payment_states SET done = 0 WHERE done IS NULL")
+        conn.execute("UPDATE debt_payment_states SET updated_at = '' WHERE updated_at IS NULL")
 
         conn.commit()

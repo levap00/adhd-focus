@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException
 
 from backend.db import get_db
-from backend.schemas import ModuleCreate
+from backend.schemas import ModuleCreate, ModuleUpdate
 from backend.utils import normalize_module_category
 
 router = APIRouter()
@@ -38,6 +38,39 @@ def add_module(payload: ModuleCreate):
         conn.commit()
 
     return {"id": cur.lastrowid, "name": clean_name, "category": clean_category}
+
+
+@router.put("/modules/{module_id}")
+def update_module(module_id: int, payload: ModuleUpdate):
+    update_data = payload.model_dump(exclude_none=True)
+    if not update_data:
+        return {"status": "no_updates"}
+
+    allowed_fields = {"name", "category"}
+    update_data = {key: value for key, value in update_data.items() if key in allowed_fields}
+
+    if "name" in update_data:
+        update_data["name"] = (update_data["name"] or "").strip()
+        if not update_data["name"]:
+            raise HTTPException(status_code=400, detail="Nazwa modulu nie moze byc pusta")
+
+    if "category" in update_data:
+        update_data["category"] = normalize_module_category(update_data["category"])
+
+    with get_db() as conn:
+        module = conn.execute("SELECT * FROM modules WHERE id = ?", (module_id,)).fetchone()
+        if not module:
+            raise HTTPException(status_code=404, detail="Modul nie znaleziony")
+
+        if not update_data:
+            return {"status": "no_updates"}
+
+        keys = ", ".join([f"{key} = ?" for key in update_data.keys()])
+        values = list(update_data.values()) + [module_id]
+        conn.execute(f"UPDATE modules SET {keys} WHERE id = ?", values)
+        conn.commit()
+
+    return {"status": "updated", "id": module_id}
 
 
 @router.delete("/modules/{module_id}")

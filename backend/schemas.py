@@ -8,6 +8,11 @@ class ModuleCreate(BaseModel):
     category: str = "praca"
 
 
+class ModuleUpdate(BaseModel):
+    name: Optional[str] = None
+    category: Optional[str] = None
+
+
 class TaskCreate(BaseModel):
     name: str
     module_id: int
@@ -51,14 +56,23 @@ class MonthlyTaskStatePayload(BaseModel):
 class DebtCreate(BaseModel):
     name: str
     place: str = ""
+    kind: str = "debt"
     total_amount: float = 0.0
     monthly_amount: float = 0.0
+    due_day: int = 0
     note: str = ""
 
 
 class DebtUpdate(BaseModel):
     name: Optional[str] = None
     place: Optional[str] = None
+    kind: Optional[str] = None
     total_amount: Optional[float] = None
     monthly_amount: Optional[float] = None
+    due_day: Optional[int] = None
     note: Optional[str] = None
+
+
+class DebtStatePayload(BaseModel):
+    month_key: Optional[str] = None
+    done: Optional[bool] = None
