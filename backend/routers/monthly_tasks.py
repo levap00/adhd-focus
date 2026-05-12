@@ -1,3 +1,7 @@
+import re
+from calendar import monthrange
+from datetime import date, timedelta
+
 from fastapi import APIRouter, HTTPException, Query
 
 from backend.db import get_db
@@ -5,41 +9,152 @@ from backend.schemas import MonthlyTaskCreate, MonthlyTaskStatePayload, MonthlyT
 from backend.utils import normalize_month_key, parse_non_negative_int, utc_now_iso
 
 router = APIRouter()
+WEEK_KEY_PATTERN = re.compile(r"^week:(\d{4}-\d{2}-\d{2})$")
+
+
+def normalize_repeat_type(raw: str) -> str:
+    value = (raw or "monthly").strip().lower()
+    return "weekly" if value.startswith("week") else "monthly"
+
+
+def normalize_repeat_weekday(raw) -> int:
+    weekday = parse_non_negative_int(raw, default=1)
+    if weekday < 1 or weekday > 7:
+        return 1
+    return weekday
+
+
+def to_week_state_key(date_key: str) -> str:
+    point = date.fromisoformat(date_key)
+    monday = point - timedelta(days=point.isoweekday() - 1)
+    return f"week:{monday.isoformat()}"
+
+
+def current_week_state_key() -> str:
+    today = date.today()
+    monday = today - timedelta(days=today.isoweekday() - 1)
+    return f"week:{monday.isoformat()}"
+
+
+def normalize_state_key(raw: str | None, repeat_type: str) -> str:
+    value = (raw or "").strip()
+    if re.fullmatch(r"\d{4}-\d{2}", value):
+        return value
+    if WEEK_KEY_PATTERN.fullmatch(value):
+        return value
+    if repeat_type == "weekly":
+        return current_week_state_key()
+    return normalize_month_key(value)
+
+
+def get_occurrence_date_keys(month_key: str, repeat_type: str, due_day: int, repeat_weekday: int) -> list[str]:
+    year, month = month_key.split("-")
+    year_num = int(year)
+    month_num = int(month)
+    days_in_month = monthrange(year_num, month_num)[1]
+
+    if repeat_type == "weekly":
+        entries: list[str] = []
+        for day in range(1, days_in_month + 1):
+            point = date(year_num, month_num, day)
+            if point.isoweekday() == repeat_weekday:
+                entries.append(point.isoformat())
+        return entries
+
+    if due_day <= 0:
+        return []
+    normalized_day = min(days_in_month, max(1, due_day))
+    return [f"{year_num:04d}-{month_num:02d}-{normalized_day:02d}"]
 
 
 @router.get("/monthly-tasks")
 def get_monthly_tasks(month: str = Query(default="")):
     month_key = normalize_month_key(month)
     with get_db() as conn:
-        rows = conn.execute(
+        base_rows = conn.execute(
             """
             SELECT
                 mt.id,
                 mt.name,
                 COALESCE(mt.due_day, 0) AS due_day,
+                COALESCE(mt.repeat_type, 'monthly') AS repeat_type,
+                COALESCE(mt.repeat_weekday, 1) AS repeat_weekday,
                 mt.created_at,
-                mt.updated_at,
-                COALESCE(ms.done, 0) AS done,
-                COALESCE(ms.note, '') AS note,
-                COALESCE(ms.updated_at, '') AS state_updated_at
+                mt.updated_at
             FROM monthly_tasks mt
-            LEFT JOIN monthly_task_states ms
-                ON ms.monthly_task_id = mt.id
-                AND ms.month_key = ?
             ORDER BY mt.id DESC
             """,
-            (month_key,),
         ).fetchall()
+
+        task_ids = [int(row["id"]) for row in base_rows]
+        states_by_key: dict[tuple[int, str], dict] = {}
+        if task_ids:
+            placeholders = ", ".join(["?"] * len(task_ids))
+            state_rows = conn.execute(
+                f"""
+                SELECT monthly_task_id, month_key, done, note, updated_at
+                FROM monthly_task_states
+                WHERE monthly_task_id IN ({placeholders})
+                """,
+                task_ids,
+            ).fetchall()
+            for state_row in state_rows:
+                states_by_key[(int(state_row["monthly_task_id"]), state_row["month_key"])] = {
+                    "done": bool(state_row["done"]),
+                    "note": state_row["note"] or "",
+                    "updated_at": state_row["updated_at"] or "",
+                }
 
     items = []
     done_count = 0
-    for row in rows:
-        item = dict(row)
-        item["done"] = bool(item.get("done"))
-        if item["done"]:
-            done_count += 1
-        item["month_key"] = month_key
-        items.append(item)
+    for row in base_rows:
+        task_id = int(row["id"])
+        repeat_type = normalize_repeat_type(row["repeat_type"] or "monthly")
+        repeat_weekday = normalize_repeat_weekday(row["repeat_weekday"])
+        due_day = min(31, parse_non_negative_int(row["due_day"]))
+
+        occurrence_date_keys = get_occurrence_date_keys(
+            month_key=month_key,
+            repeat_type=repeat_type,
+            due_day=due_day,
+            repeat_weekday=repeat_weekday,
+        )
+        if not occurrence_date_keys:
+            occurrence_date_keys = [""]
+
+        for date_key in occurrence_date_keys:
+            state_key = to_week_state_key(date_key) if repeat_type == "weekly" and date_key else month_key
+            state = states_by_key.get((task_id, state_key), {"done": False, "note": "", "updated_at": ""})
+            done = bool(state["done"])
+            if done:
+                done_count += 1
+            items.append(
+                {
+                    "id": task_id,
+                    "instance_id": f"{task_id}:{state_key}:{date_key or 'none'}",
+                    "name": row["name"] or "",
+                    "due_day": due_day,
+                    "repeat_type": repeat_type,
+                    "repeat_weekday": repeat_weekday,
+                    "date_key": date_key,
+                    "state_key": state_key,
+                    "done": done,
+                    "note": state["note"],
+                    "state_updated_at": state["updated_at"],
+                    "created_at": row["created_at"] or "",
+                    "updated_at": row["updated_at"] or "",
+                    "month_key": month_key,
+                }
+            )
+
+    items = sorted(
+        items,
+        key=lambda item: (
+            item["date_key"] or "9999-99-99",
+            item["name"].lower(),
+            int(item["id"]),
+        ),
+    )
 
     return {
         "month_key": month_key,
@@ -57,17 +172,30 @@ def add_monthly_task(payload: MonthlyTaskCreate):
     name = (payload.name or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="Nazwa zadania miesiecznego nie moze byc pusta")
-    due_day = min(31, parse_non_negative_int(payload.due_day))
+    repeat_type = normalize_repeat_type(payload.repeat_type)
+    due_day = min(31, parse_non_negative_int(payload.due_day)) if repeat_type == "monthly" else 0
+    repeat_weekday = normalize_repeat_weekday(payload.repeat_weekday)
 
     now = utc_now_iso()
     with get_db() as conn:
         cur = conn.execute(
-            "INSERT INTO monthly_tasks (name, due_day, created_at, updated_at) VALUES (?, ?, ?, ?)",
-            (name, due_day, now, now),
+            """
+            INSERT INTO monthly_tasks (name, due_day, repeat_type, repeat_weekday, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (name, due_day, repeat_type, repeat_weekday, now, now),
         )
         conn.commit()
 
-    return {"id": cur.lastrowid, "name": name, "due_day": due_day, "created_at": now, "updated_at": now}
+    return {
+        "id": cur.lastrowid,
+        "name": name,
+        "due_day": due_day,
+        "repeat_type": repeat_type,
+        "repeat_weekday": repeat_weekday,
+        "created_at": now,
+        "updated_at": now,
+    }
 
 
 @router.put("/monthly-tasks/{task_id}")
@@ -75,7 +203,9 @@ def update_monthly_task(task_id: int, payload: MonthlyTaskUpdate):
     name = (payload.name or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="Nazwa zadania miesiecznego nie moze byc pusta")
-    due_day = min(31, parse_non_negative_int(payload.due_day))
+    repeat_type = normalize_repeat_type(payload.repeat_type)
+    due_day = min(31, parse_non_negative_int(payload.due_day)) if repeat_type == "monthly" else 0
+    repeat_weekday = normalize_repeat_weekday(payload.repeat_weekday)
 
     now = utc_now_iso()
     with get_db() as conn:
@@ -84,12 +214,24 @@ def update_monthly_task(task_id: int, payload: MonthlyTaskUpdate):
             raise HTTPException(status_code=404, detail="Zadanie miesieczne nie znalezione")
 
         conn.execute(
-            "UPDATE monthly_tasks SET name = ?, due_day = ?, updated_at = ? WHERE id = ?",
-            (name, due_day, now, task_id),
+            """
+            UPDATE monthly_tasks
+            SET name = ?, due_day = ?, repeat_type = ?, repeat_weekday = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (name, due_day, repeat_type, repeat_weekday, now, task_id),
         )
         conn.commit()
 
-    return {"status": "updated", "id": task_id, "name": name, "due_day": due_day, "updated_at": now}
+    return {
+        "status": "updated",
+        "id": task_id,
+        "name": name,
+        "due_day": due_day,
+        "repeat_type": repeat_type,
+        "repeat_weekday": repeat_weekday,
+        "updated_at": now,
+    }
 
 
 @router.delete("/monthly-tasks/{task_id}")
@@ -107,16 +249,19 @@ def delete_monthly_task(task_id: int):
 
 @router.put("/monthly-tasks/{task_id}/state")
 def update_monthly_task_state(task_id: int, payload: MonthlyTaskStatePayload):
-    month_key = normalize_month_key(payload.month_key)
-
     with get_db() as conn:
-        task_exists = conn.execute("SELECT id FROM monthly_tasks WHERE id = ?", (task_id,)).fetchone()
+        task_exists = conn.execute(
+            "SELECT id, repeat_type FROM monthly_tasks WHERE id = ?",
+            (task_id,),
+        ).fetchone()
         if not task_exists:
             raise HTTPException(status_code=404, detail="Zadanie miesieczne nie znalezione")
+        repeat_type = normalize_repeat_type(task_exists["repeat_type"] or "monthly")
+        state_key = normalize_state_key(payload.month_key, repeat_type)
 
         existing_state = conn.execute(
             "SELECT done, note FROM monthly_task_states WHERE monthly_task_id = ? AND month_key = ?",
-            (task_id, month_key),
+            (task_id, state_key),
         ).fetchone()
 
         if payload.note is not None:
@@ -142,13 +287,13 @@ def update_monthly_task_state(task_id: int, payload: MonthlyTaskStatePayload):
                 note = excluded.note,
                 updated_at = excluded.updated_at
             """,
-            (task_id, month_key, done, note, now),
+            (task_id, state_key, done, note, now),
         )
         conn.commit()
 
     return {
         "task_id": task_id,
-        "month_key": month_key,
+        "month_key": state_key,
         "done": bool(done),
         "note": note,
         "updated_at": now,

@@ -1,7 +1,9 @@
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import FileResponse, RedirectResponse
+
+from backend.auth import get_session_user
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 STATIC_ROOT = (PROJECT_ROOT / "static").resolve()
@@ -11,7 +13,9 @@ router = APIRouter()
 
 
 @router.get("/")
-def root() -> FileResponse:
+def root(request: Request):
+    if not get_session_user(request):
+        return RedirectResponse(url="/login", status_code=303)
     return FileResponse(INDEX_FILE)
 
 

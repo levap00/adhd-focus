@@ -13,14 +13,26 @@ class ModuleUpdate(BaseModel):
     category: Optional[str] = None
 
 
+class TaskSubtaskPayload(BaseModel):
+    id: Optional[int] = None
+    title: str = ""
+    done: bool = False
+    estimated_time: int = 0
+    points_weight: float = 0.0
+
+
 class TaskCreate(BaseModel):
     name: str
     module_id: int
     status: str = "oczekujace"
     estimated_time: int = 0
+    points_weight: float = 1.0
     description: str = ""
     due_date: str = ""
+    due_time: str = ""
     priority: str = ""
+    allow_time_overflow: bool = False
+    subtasks: list[TaskSubtaskPayload] = []
 
 
 class TaskUpdate(BaseModel):
@@ -30,7 +42,11 @@ class TaskUpdate(BaseModel):
     priority: Optional[str] = None
     description: Optional[str] = None
     due_date: Optional[str] = None
+    due_time: Optional[str] = None
     estimated_time: Optional[int] = None
+    points_weight: Optional[float] = None
+    allow_time_overflow: Optional[bool] = None
+    subtasks: Optional[list[TaskSubtaskPayload]] = None
 
 
 class NotePayload(BaseModel):
@@ -40,17 +56,39 @@ class NotePayload(BaseModel):
 class MonthlyTaskCreate(BaseModel):
     name: str
     due_day: int = 0
+    repeat_type: str = "monthly"
+    repeat_weekday: int = 1
 
 
 class MonthlyTaskUpdate(BaseModel):
     name: str
     due_day: int = 0
+    repeat_type: str = "monthly"
+    repeat_weekday: int = 1
 
 
 class MonthlyTaskStatePayload(BaseModel):
     month_key: Optional[str] = None
     done: Optional[bool] = None
     note: Optional[str] = None
+
+
+class MedicationCreate(BaseModel):
+    name: str
+    schedule_type: str = "daily"
+    reminder_time: str = "08:00"
+
+
+class MedicationUpdate(BaseModel):
+    name: Optional[str] = None
+    schedule_type: Optional[str] = None
+    reminder_time: Optional[str] = None
+    active: Optional[bool] = None
+
+
+class MedicationStatePayload(BaseModel):
+    date_key: Optional[str] = None
+    done: Optional[bool] = None
 
 
 class DebtCreate(BaseModel):

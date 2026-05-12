@@ -12,6 +12,7 @@
                 taskScope: 'all',
                 moduleOrder: [],
                 dailyGoal: 5,
+                workdayLimitMinutes: 8 * 60,
                 taskModal: false,
                 isCreatingTask: false,
                 editingTask: {},
@@ -32,12 +33,29 @@
                 selectedDate: '',
                 monthlyMonthKey: '',
                 monthlyTasks: [],
+                medicationsDate: '',
+                medications: [],
+                medicationsSummary: { total: 0, scheduled: 0, done: 0, open: 0 },
+                newMedication: {
+                    name: '',
+                    schedule_type: 'daily',
+                    reminder_time: '08:00'
+                },
                 newMonthlyTaskName: '',
                 newMonthlyTaskDueDay: '',
+                newMonthlyTaskRepeatType: 'monthly',
+                newMonthlyTaskRepeatWeekday: 1,
                 monthlyTaskModal: false,
                 debts: [],
                 debtsMonthKey: '',
                 debtsSummary: { count: 0, total: 0, monthly: 0, debt_total: 0, debt_monthly: 0, fixed_monthly: 0, fixed_count: 0, debt_count: 0 },
+                rewardSummary: {
+                    earned_points: 0,
+                    spent_points: 0,
+                    available_points: 0,
+                    available_budget_pln: 0,
+                    point_value_pln: 1
+                },
                 debtModal: false,
                 newDebt: {
                     name: '',
@@ -62,18 +80,21 @@
                 canvasLinkDraftFromId: null,
                 canvasBoardWidth: 12000,
                 canvasBoardHeight: 8000,
+                canvasZoom: 1,
+                canvasMinZoom: 0.35,
+                canvasMaxZoom: 2.5,
                 canvasGridVisible: true,
                 canvasSnapToGrid: false,
                 canvasSaveTimer: null,
                 canvasStorageKey: 'adhd-focus-canvas-v2',
                 canvasLegacyStorageKey: 'adhd-focus-canvas-v1',
                 canvasColorOptions: [
-                    { id: 'slate', label: 'Szary', swatch: '#e2e8f0', bg: '#ffffff', border: '#cbd5e1', text: '#0f172a' },
-                    { id: 'emerald', label: 'Zielony', swatch: '#10b981', bg: '#ecfdf5', border: '#6ee7b7', text: '#064e3b' },
-                    { id: 'sky', label: 'Niebieski', swatch: '#0ea5e9', bg: '#e0f2fe', border: '#7dd3fc', text: '#082f49' },
-                    { id: 'amber', label: 'Bursztyn', swatch: '#f59e0b', bg: '#fffbeb', border: '#fcd34d', text: '#78350f' },
-                    { id: 'rose', label: 'Rozowy', swatch: '#f43f5e', bg: '#fff1f2', border: '#fda4af', text: '#881337' },
-                    { id: 'violet', label: 'Fiolet', swatch: '#8b5cf6', bg: '#f5f3ff', border: '#c4b5fd', text: '#4c1d95' }
+                    { id: 'slate', label: 'Szary', swatch: '#e2e8f0', line: '#64748b', bg: '#ffffff', border: '#cbd5e1', text: '#0f172a' },
+                    { id: 'emerald', label: 'Zielony', swatch: '#10b981', line: '#059669', bg: '#ecfdf5', border: '#6ee7b7', text: '#064e3b' },
+                    { id: 'sky', label: 'Niebieski', swatch: '#0ea5e9', line: '#0284c7', bg: '#e0f2fe', border: '#7dd3fc', text: '#082f49' },
+                    { id: 'amber', label: 'Bursztyn', swatch: '#f59e0b', line: '#d97706', bg: '#fffbeb', border: '#fcd34d', text: '#78350f' },
+                    { id: 'rose', label: 'Rozowy', swatch: '#f43f5e', line: '#e11d48', bg: '#fff1f2', border: '#fda4af', text: '#881337' },
+                    { id: 'violet', label: 'Fiolet', swatch: '#8b5cf6', line: '#7c3aed', bg: '#f5f3ff', border: '#c4b5fd', text: '#4c1d95' }
                 ],
                 canvasShapeOptions: [
                     { id: 'text', label: 'Tekst' },
@@ -89,7 +110,7 @@
                 weekLabels: ['Pon', 'Wt', 'Sr', 'Czw', 'Pt', 'Sob', 'Nd'],
                 columnsMeta: [
                     { id: 'oczekujace', name: 'Oczekujace', color: 'text-slate-500' },
-                    { id: 'przygotowanie', name: 'Przygotowanie', color: 'text-amber-600' },
+                    { id: 'przygotowanie', name: 'Review / Hold', color: 'text-amber-600' },
                     { id: 'todo', name: 'Teraz robie', color: 'text-cyan-600' },
                     { id: 'gotowe', name: 'Gotowe', color: 'text-emerald-600' }
                 ],
@@ -144,10 +165,13 @@
                     if (!this.calendarCursor) this.calendarCursor = this.getTodayKey();
                     if (!this.selectedDate) this.selectedDate = this.getTodayKey();
                     if (!this.monthlyMonthKey) this.monthlyMonthKey = this.getCurrentMonthKey();
+                    if (!this.medicationsDate) this.medicationsDate = this.getTodayKey();
 
                     await Promise.all([
                         this.loadModules(),
                         this.loadAllTasks(),
+                        this.loadRewardSummary(),
+                        this.loadMedications(),
                         this.loadBrainDump(),
                         this.loadCanvasBoard(),
                         this.loadProjectDoc(),
@@ -311,6 +335,76 @@
                     return ['oczekujace', 'przygotowanie', 'todo', 'gotowe'].includes(value) ? value : 'oczekujace';
                 },
 
+                normalizePointsWeight(value) {
+                    const normalizedRaw = typeof value === 'string'
+                        ? value.replace(',', '.').trim()
+                        : value;
+                    const parsed = Number(normalizedRaw);
+                    if (!Number.isFinite(parsed) || parsed <= 0) return 1;
+                    return Math.round(parsed * 100) / 100;
+                },
+
+                normalizeEstimatedMinutes(value) {
+                    const parsed = Math.round(Number(value));
+                    if (!Number.isFinite(parsed) || parsed < 0) return 0;
+                    return parsed;
+                },
+
+                normalizeSubtaskPointsWeight(value) {
+                    const normalizedRaw = typeof value === 'string'
+                        ? value.replace(',', '.').trim()
+                        : value;
+                    const parsed = Number(normalizedRaw);
+                    if (!Number.isFinite(parsed) || parsed < 0) return 0;
+                    return Math.round(parsed * 100) / 100;
+                },
+
+                normalizeSubtaskEstimatedMinutes(value) {
+                    const parsed = Math.round(Number(value));
+                    if (!Number.isFinite(parsed) || parsed < 0) return 0;
+                    return parsed;
+                },
+
+                formatDurationMinutes(value) {
+                    const minutes = this.normalizeEstimatedMinutes(value);
+                    const hours = Math.floor(minutes / 60);
+                    const rest = minutes % 60;
+                    if (hours > 0 && rest > 0) return `${hours}h ${rest}m`;
+                    if (hours > 0) return `${hours}h`;
+                    return `${rest}m`;
+                },
+
+                normalizeSubtasks(subtasks) {
+                    if (!Array.isArray(subtasks)) return [];
+                    const normalized = [];
+                    for (const item of subtasks) {
+                        const title = (item?.title || '').toString().trim();
+                        if (!title) continue;
+                        const idValue = Number(item?.id);
+                        normalized.push({
+                            id: Number.isFinite(idValue) ? idValue : null,
+                            title,
+                            done: !!item?.done,
+                            estimated_time: this.normalizeSubtaskEstimatedMinutes(item?.estimated_time),
+                            points_weight: this.normalizeSubtaskPointsWeight(item?.points_weight),
+                            done_at: item?.done_at || '',
+                            position: normalized.length
+                        });
+                    }
+                    return normalized;
+                },
+
+                createSubtaskDraft(title = '') {
+                    return {
+                        id: null,
+                        title: title || '',
+                        done: false,
+                        estimated_time: 15,
+                        points_weight: 1,
+                        done_at: ''
+                    };
+                },
+
                 moveModule(moduleId, direction) {
                     const index = this.moduleOrder.indexOf(moduleId);
                     if (index === -1) return;
@@ -413,7 +507,11 @@
                     this.tasks = payload.map(task => ({
                         ...task,
                         status: this.normalizeTaskStatus(task.status),
-                        priority: this.normalizePriorityValue(task.priority)
+                        priority: this.normalizePriorityValue(task.priority),
+                        estimated_time: this.normalizeEstimatedMinutes(task.estimated_time),
+                        points_weight: this.normalizePointsWeight(task.points_weight),
+                        due_time: this.sanitizeDueTime(task.due_time, task.due_date ? '14:00' : ''),
+                        subtasks: this.normalizeSubtasks(task.subtasks)
                     }));
                 },
 
@@ -513,7 +611,48 @@
                     }
                     const payload = await res.json();
                     this.monthlyMonthKey = payload.month_key || month;
-                    this.monthlyTasks = Array.isArray(payload.items) ? payload.items : [];
+                    this.monthlyTasks = Array.isArray(payload.items)
+                        ? payload.items.map(task => ({
+                            ...task,
+                            id: Number(task.id) || 0,
+                            instance_id: task.instance_id || `${task.id || 'task'}-${task.state_key || this.monthlyMonthKey}`,
+                            due_day: this.normalizeMonthlyDueDay(task.due_day),
+                            repeat_type: this.normalizeMonthlyRepeatType(task.repeat_type),
+                            repeat_weekday: this.normalizeMonthlyRepeatWeekday(task.repeat_weekday),
+                            date_key: this.sanitizeDateKey(task.date_key),
+                            state_key: (task.state_key || payload.month_key || month).toString(),
+                            done: !!task.done
+                        }))
+                        : [];
+                },
+
+                async loadMedications(dateKey = '') {
+                    const cleanDate = this.sanitizeDateKey(dateKey || this.medicationsDate || this.getTodayKey()) || this.getTodayKey();
+                    this.medicationsDate = cleanDate;
+                    const res = await fetch(`${this.API}/medications?date=${encodeURIComponent(cleanDate)}`);
+                    if (!res.ok) {
+                        this.medications = [];
+                        this.medicationsSummary = { total: 0, scheduled: 0, done: 0, open: 0 };
+                        return;
+                    }
+                    const payload = await res.json();
+                    this.medicationsDate = this.sanitizeDateKey(payload.date_key) || cleanDate;
+                    this.medications = Array.isArray(payload.items)
+                        ? payload.items.map(item => ({
+                            ...item,
+                            id: Number(item.id) || 0,
+                            schedule_type: this.normalizeMedicationScheduleType(item.schedule_type),
+                            reminder_time: this.sanitizeDueTime(item.reminder_time, '08:00') || '08:00',
+                            scheduled_today: !!item.scheduled_today,
+                            done: !!item.done
+                        }))
+                        : [];
+                    this.medicationsSummary = {
+                        total: Number(payload.summary?.total || 0),
+                        scheduled: Number(payload.summary?.scheduled || 0),
+                        done: Number(payload.summary?.done || 0),
+                        open: Number(payload.summary?.open || 0)
+                    };
                 },
 
                 async loadDebts(monthKey = '') {
@@ -529,6 +668,29 @@
                     this.debts = Array.isArray(payload.items) ? payload.items : [];
                     this.debtsMonthKey = payload.month_key || cleanMonthKey;
                     this.debtsSummary = payload.summary || { count: 0, total: 0, monthly: 0, debt_total: 0, debt_monthly: 0, fixed_monthly: 0, fixed_count: 0, debt_count: 0 };
+                },
+
+                async loadRewardSummary() {
+                    try {
+                        const response = await fetch(`${this.API}/rewards/summary`);
+                        if (!response.ok) throw new Error('reward_summary_failed');
+                        const payload = await response.json();
+                        this.rewardSummary = {
+                            earned_points: this.roundScore(payload?.earned_points || 0),
+                            spent_points: this.roundScore(payload?.spent_points || 0),
+                            available_points: this.roundScore(payload?.available_points || 0),
+                            available_budget_pln: this.roundScore(payload?.available_budget_pln || 0),
+                            point_value_pln: Number(payload?.point_value_pln) || 1
+                        };
+                    } catch (error) {
+                        this.rewardSummary = {
+                            earned_points: 0,
+                            spent_points: 0,
+                            available_points: 0,
+                            available_budget_pln: 0,
+                            point_value_pln: 1
+                        };
+                    }
                 },
 
                 async loadModuleNotes() {
@@ -626,19 +788,84 @@
                     return Math.min(31, day);
                 },
 
+                normalizeMonthlyRepeatType(value) {
+                    const type = (value || 'monthly').toString().trim().toLowerCase();
+                    return type.startsWith('week') ? 'weekly' : 'monthly';
+                },
+
+                normalizeMonthlyRepeatWeekday(value) {
+                    const day = Math.round(Number(value || 1));
+                    if (!Number.isFinite(day) || day < 1) return 1;
+                    return Math.min(7, day);
+                },
+
+                normalizeMedicationScheduleType(value) {
+                    const type = (value || 'daily').toString().trim().toLowerCase();
+                    return ['weekdays', 'weekday', 'workdays', 'workday', 'pon-pt', 'mon-fri'].includes(type)
+                        ? 'weekdays'
+                        : 'daily';
+                },
+
+                getMedicationScheduleLabel(item) {
+                    return this.normalizeMedicationScheduleType(item?.schedule_type) === 'weekdays'
+                        ? 'pon-pt'
+                        : 'codziennie';
+                },
+
+                getMedicationStatusLabel(item) {
+                    if (!item?.scheduled_today) return 'nie dzis';
+                    return item?.done ? 'odhaczone' : 'do odhaczenia';
+                },
+
+                getMedicationStatusClass(item) {
+                    if (!item?.scheduled_today) return 'bg-slate-100 text-slate-500';
+                    return item?.done ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700';
+                },
+
+                resetMedicationDraft() {
+                    this.newMedication = {
+                        name: '',
+                        schedule_type: 'daily',
+                        reminder_time: '08:00'
+                    };
+                },
+
+                shiftMedicationsDate(step) {
+                    this.medicationsDate = this.shiftDateKey(this.medicationsDate || this.getTodayKey(), step);
+                    this.loadMedications();
+                },
+
+                goToMedicationsToday() {
+                    this.medicationsDate = this.getTodayKey();
+                    this.loadMedications();
+                },
+
+                getWeekdayLabel(weekday) {
+                    const labels = ['poniedzialek', 'wtorek', 'sroda', 'czwartek', 'piatek', 'sobota', 'niedziela'];
+                    return labels[this.normalizeMonthlyRepeatWeekday(weekday) - 1] || labels[0];
+                },
+
                 getMonthlyDueLabel(task) {
+                    if (this.normalizeMonthlyRepeatType(task?.repeat_type) === 'weekly') {
+                        const dayLabel = this.getWeekdayLabel(task?.repeat_weekday);
+                        if (task?.date_key) {
+                            const date = this.keyToDate(task.date_key);
+                            return `${dayLabel} • ${date.getDate()}.${String(date.getMonth() + 1).padStart(2, '0')}`;
+                        }
+                        return `co tydzien: ${dayLabel}`;
+                    }
                     const dueDay = this.normalizeMonthlyDueDay(task?.due_day);
                     if (!dueDay) return 'bez dnia';
                     return `do ${dueDay}. dnia miesiaca`;
                 },
 
                 getMonthlyDueBadgeClass(task) {
-                    const dueDay = this.normalizeMonthlyDueDay(task?.due_day);
-                    if (!dueDay || task?.done) return 'bg-slate-100 text-slate-500';
-                    const today = new Date();
+                    if (task?.done) return 'bg-slate-100 text-slate-500';
+                    const dateKey = this.sanitizeDateKey(task?.date_key);
+                    if (!dateKey) return 'bg-slate-100 text-slate-500';
                     const currentMonth = this.getCurrentMonthKey();
                     if ((this.monthlyMonthKey || currentMonth) !== currentMonth) return 'bg-cyan-50 text-cyan-700';
-                    const daysLeft = dueDay - today.getDate();
+                    const daysLeft = this.getDaysBetweenDateKeys(this.getTodayKey(), dateKey);
                     if (daysLeft < 0) return 'bg-red-50 text-red-600';
                     if (daysLeft <= 2) return 'bg-amber-50 text-amber-700';
                     return 'bg-cyan-50 text-cyan-700';
@@ -667,6 +894,8 @@
                 resetMonthlyTaskDraft() {
                     this.newMonthlyTaskName = '';
                     this.newMonthlyTaskDueDay = '';
+                    this.newMonthlyTaskRepeatType = 'monthly';
+                    this.newMonthlyTaskRepeatWeekday = 1;
                 },
 
                 openMonthlyTaskModal() {
@@ -745,12 +974,11 @@
                 getMonthlyEntriesForDate(dateKey) {
                     const targetMonthKey = this.getMonthKeyFromDateKey(dateKey);
                     if (targetMonthKey !== (this.monthlyMonthKey || this.getCurrentMonthKey())) return [];
-                    const day = this.keyToDate(dateKey).getDate();
                     return this.monthlyTasks
-                        .filter(task => this.normalizeMonthlyDueDay(task?.due_day) === day)
+                        .filter(task => this.sanitizeDateKey(task?.date_key) === dateKey)
                         .map(task => ({
                             type: 'monthly',
-                            id: `monthly-${task.id}-${dateKey}`,
+                            id: `monthly-${task.instance_id || task.id}-${dateKey}`,
                             dateKey,
                             item: task,
                             done: !!task.done
@@ -777,18 +1005,194 @@
                         type: 'task',
                         id: `task-${task.id}-${dateKey}`,
                         dateKey,
-                        item: task
+                        item: task,
+                        isCarriedOver: false,
+                        delayDays: 0,
+                        sourceDateKey: task.due_date
                     }));
                     const monthlyEntries = this.getMonthlyEntriesForDate(dateKey);
                     const debtEntries = this.getDebtEntriesForDate(dateKey);
-                    const order = { debt: 0, monthly: 1, task: 2 };
-                    return [...debtEntries, ...monthlyEntries, ...taskEntries].sort((a, b) => {
-                        const typeDiff = (order[a.type] ?? 9) - (order[b.type] ?? 9);
-                        if (typeDiff !== 0) return typeDiff;
+                    return this.sortCalendarEntries([...debtEntries, ...monthlyEntries, ...taskEntries]);
+                },
+
+                getCalendarAgendaEntriesForDate(dateKey) {
+                    const cleanDateKey = this.sanitizeDateKey(dateKey);
+                    if (!cleanDateKey) return [];
+                    const todayKey = this.getTodayKey();
+                    const allowCarryOver = cleanDateKey <= todayKey;
+
+                    const taskEntries = this.getOpenTasks()
+                        .filter(task => {
+                            const dueDate = this.sanitizeDateKey(task?.due_date);
+                            if (!dueDate) return false;
+                            if (dueDate === cleanDateKey) return true;
+                            return allowCarryOver && dueDate < cleanDateKey;
+                        })
+                        .map(task => {
+                            const delayDays = Math.max(0, this.getDaysBetweenDateKeys(task.due_date, cleanDateKey));
+                            return {
+                                type: 'task',
+                                id: `agenda-task-${task.id}-${cleanDateKey}`,
+                                dateKey: cleanDateKey,
+                                item: task,
+                                isCarriedOver: delayDays > 0,
+                                delayDays,
+                                sourceDateKey: task.due_date
+                            };
+                        });
+
+                    const monthlyEntries = this.getMonthlyEntriesForDate(cleanDateKey);
+                    const debtEntries = this.getDebtEntriesForDate(cleanDateKey);
+                    return this.sortCalendarEntries([...debtEntries, ...monthlyEntries, ...taskEntries]);
+                },
+
+                sortCalendarEntries(entries) {
+                    return [...entries].sort((a, b) => {
+                        const timeDiff = this.getCalendarEntrySortScore(a) - this.getCalendarEntrySortScore(b);
+                        if (timeDiff !== 0) return timeDiff;
+                        const urgencyDiff = this.getCalendarEntryUrgencyRank(a) - this.getCalendarEntryUrgencyRank(b);
+                        if (urgencyDiff !== 0) return urgencyDiff;
+                        const priorityDiff = this.getCalendarEntryPriorityRank(a) - this.getCalendarEntryPriorityRank(b);
+                        if (priorityDiff !== 0) return priorityDiff;
+                        const workflowDiff = this.getCalendarEntryWorkflowRank(a) - this.getCalendarEntryWorkflowRank(b);
+                        if (workflowDiff !== 0) return workflowDiff;
                         const aName = (a.item?.name || '').toString();
                         const bName = (b.item?.name || '').toString();
                         return aName.localeCompare(bName, 'pl');
                     });
+                },
+
+                getDaysBetweenDateKeys(fromDateKey, toDateKey) {
+                    const from = this.sanitizeDateKey(fromDateKey);
+                    const to = this.sanitizeDateKey(toDateKey);
+                    if (!from || !to) return 0;
+                    return Math.round((this.keyToDate(to) - this.keyToDate(from)) / 86400000);
+                },
+
+                getCalendarPreviewDays() {
+                    const startKey = this.sanitizeDateKey(this.selectedDate || this.calendarCursor || this.getTodayKey()) || this.getTodayKey();
+                    const days = [];
+                    for (let offset = 0; offset < 3; offset++) {
+                        const dateKey = this.shiftDateKey(startKey, offset);
+                        const workload = this.getDayWorkloadSummary(dateKey);
+                        days.push({
+                            dateKey,
+                            isToday: dateKey === this.getTodayKey(),
+                            isSelected: dateKey === this.selectedDate,
+                            entries: this.getCalendarAgendaEntriesForDate(dateKey),
+                            plannedMinutes: workload.plannedMinutes,
+                            isOverLimit: workload.isOverLimit
+                        });
+                    }
+                    return days;
+                },
+
+                getCalendarPreviewEntriesCount() {
+                    return this.getCalendarPreviewDays().reduce((sum, day) => sum + (day.entries?.length || 0), 0);
+                },
+
+                formatCalendarPreviewWeekday(dateKey) {
+                    return new Intl.DateTimeFormat('pl-PL', { weekday: 'long' }).format(this.keyToDate(dateKey));
+                },
+
+                formatCalendarPreviewDay(dateKey) {
+                    return new Intl.DateTimeFormat('pl-PL', { day: 'numeric', month: 'long' }).format(this.keyToDate(dateKey));
+                },
+
+                getCalendarEntryTime(entry) {
+                    if (entry?.type !== 'task') return '';
+                    return this.getTaskDueTime(entry.item) || '14:00';
+                },
+
+                getCalendarEntrySortScore(entry) {
+                    if (entry?.type === 'task') {
+                        const dueTime = this.getCalendarEntryTime(entry);
+                        if (/^([01]\d|2[0-3]):[0-5]\d$/.test(dueTime)) {
+                            const [hours, minutes] = dueTime.split(':').map(Number);
+                            return (hours * 60) + minutes;
+                        }
+                        return 24 * 60;
+                    }
+                    if (entry?.type === 'debt') return (24 * 60) + 10;
+                    if (entry?.type === 'monthly') return (24 * 60) + 20;
+                    return (24 * 60) + 30;
+                },
+
+                getCalendarEntryUrgencyRank(entry) {
+                    if (entry?.type !== 'task') return 4;
+                    if (entry?.isCarriedOver || this.isTaskOverdue(entry?.item)) return 0;
+                    if (this.normalizePriorityValue(entry?.item?.priority) === 'P1') return 1;
+                    return 2;
+                },
+
+                getCalendarEntryPriorityRank(entry) {
+                    if (entry?.type !== 'task') return 4;
+                    return this.priorityRank(entry?.item?.priority);
+                },
+
+                getCalendarEntryWorkflowRank(entry) {
+                    if (entry?.type !== 'task') return 6;
+                    return this.statusRank(entry?.item?.status);
+                },
+
+                getCalendarTaskUrgencyLabel(entry) {
+                    if (entry?.type !== 'task') return '';
+                    if (entry?.isCarriedOver) {
+                        return entry.delayDays <= 1 ? 'opoznione' : `opoznione ${entry.delayDays} dni`;
+                    }
+                    const task = entry?.item;
+                    if (this.isTaskOverdue(task)) {
+                        const days = this.daysUntilDue(task);
+                        return days < 0 ? `${Math.abs(days)} d. po terminie` : 'po terminie';
+                    }
+                    const days = this.daysUntilDue(task);
+                    if (days === 0) return 'na dzis';
+                    if (days === 1) return 'jutro';
+                    if (days !== null && days > 1 && days <= 7) return `za ${days} dni`;
+                    if (this.normalizePriorityValue(task?.priority) === 'P1') return 'pilne';
+                    return 'niepilne';
+                },
+
+                getCalendarTaskUrgencyClass(entry) {
+                    if (entry?.type !== 'task') return 'calendar-entry-urgency-normal';
+                    const task = entry?.item;
+                    if (entry?.isCarriedOver || this.isTaskOverdue(task)) return 'calendar-entry-urgency-overdue';
+                    const days = this.daysUntilDue(task);
+                    if (days === 0) return 'calendar-entry-urgency-today';
+                    if (days === 1 || (days !== null && days > 1 && days <= 7)) return 'calendar-entry-urgency-upcoming';
+                    if (this.normalizePriorityValue(task?.priority) === 'P1') return 'calendar-entry-urgency-urgent';
+                    return 'calendar-entry-urgency-normal';
+                },
+
+                getCalendarTaskStateClass(entry) {
+                    if (entry?.type !== 'task') return '';
+                    return (entry?.isCarriedOver || this.isTaskOverdue(entry?.item)) ? 'calendar-entry-overdue' : '';
+                },
+
+                getCalendarTaskStatusLabel(entry) {
+                    if (entry?.type !== 'task') return '';
+                    const normalized = this.normalizeTaskStatus(entry?.item?.status);
+                    return {
+                        todo: 'w toku',
+                        przygotowanie: 'przygot.',
+                        oczekujace: 'oczek.'
+                    }[normalized] || normalized;
+                },
+
+                getCalendarTaskStatusClass(entry) {
+                    if (entry?.type !== 'task') return 'calendar-entry-status-waiting';
+                    const normalized = this.normalizeTaskStatus(entry?.item?.status);
+                    return {
+                        todo: 'calendar-entry-status-todo',
+                        przygotowanie: 'calendar-entry-status-prep',
+                        oczekujace: 'calendar-entry-status-waiting'
+                    }[normalized] || 'calendar-entry-status-waiting';
+                },
+
+                getCalendarCarryOverLabel(entry) {
+                    if (entry?.type !== 'task' || !entry?.isCarriedOver) return '';
+                    if (entry.delayDays <= 1) return 'z wczoraj';
+                    return `z ${entry.delayDays} dni temu`;
                 },
 
                 getMonthlyDoneCount() {
@@ -802,6 +1206,136 @@
                 sanitizeDateKey(value) {
                     const clean = (value || '').toString().trim();
                     return /^\d{4}-\d{2}-\d{2}$/.test(clean) ? clean : '';
+                },
+
+                sanitizeDueTime(value, fallback = '14:00') {
+                    const clean = (value || '').toString().trim();
+                    if (/^([01]\d|2[0-3]):[0-5]\d$/.test(clean)) return clean;
+                    if (/^([01]\d|2[0-3]):[0-5]\d:[0-5]\d$/.test(clean)) return clean.slice(0, 5);
+                    if (/^([01]\d|2[0-3]):[0-5]\d$/.test((fallback || '').toString().trim())) {
+                        return (fallback || '').toString().trim();
+                    }
+                    return '';
+                },
+
+                getTaskDueDateTime(task) {
+                    const dueDate = this.sanitizeDateKey(task?.due_date);
+                    if (!dueDate) return null;
+                    const dueTime = this.sanitizeDueTime(task?.due_time, '14:00') || '14:00';
+                    const [hours, minutes] = dueTime.split(':').map(Number);
+                    const due = this.keyToDate(dueDate);
+                    due.setHours(hours || 14, minutes || 0, 0, 0);
+                    return due;
+                },
+
+                getTaskDueTime(task) {
+                    if (!this.sanitizeDateKey(task?.due_date)) return '';
+                    return this.sanitizeDueTime(task?.due_time, '14:00');
+                },
+
+                getTaskDoneDateKey(task) {
+                    const description = (task?.description || '').toString();
+                    const matches = [...description.matchAll(/\[Done:\s*(\d{4}-\d{2}-\d{2})\]/g)];
+                    if (matches.length === 0) return '';
+                    return this.sanitizeDateKey(matches[matches.length - 1][1]);
+                },
+
+                getTaskWorkloadMinutesForDate(task, dateKey) {
+                    const cleanDate = this.sanitizeDateKey(dateKey);
+                    if (!cleanDate) return 0;
+                    if (this.normalizeTaskStatus(task?.status) === 'gotowe') {
+                        const taskDoneMinutes = this.getTaskDoneDateKey(task) === cleanDate
+                            ? this.getTaskEffectiveEstimatedMinutes(task)
+                            : 0;
+                        return taskDoneMinutes || this.getSubtasksWorkloadMinutesForDate(task?.subtasks, cleanDate);
+                    }
+                    const plannedMinutes = this.sanitizeDateKey(task?.due_date) === cleanDate
+                        ? this.getTaskEffectiveEstimatedMinutes(task)
+                        : 0;
+                    return plannedMinutes || this.getSubtasksWorkloadMinutesForDate(task?.subtasks, cleanDate);
+                },
+
+                getSubtasksWorkloadMinutesForDate(subtasks, dateKey) {
+                    const cleanDate = this.sanitizeDateKey(dateKey);
+                    if (!cleanDate) return 0;
+                    return this.normalizeSubtasks(subtasks).reduce((sum, subtask) => (
+                        this.getSubtaskDoneDateKey(subtask) === cleanDate
+                            ? sum + this.normalizeSubtaskEstimatedMinutes(subtask?.estimated_time)
+                            : sum
+                    ), 0);
+                },
+
+                getPlannedMinutesForDate(dateKey, excludeTaskId = null) {
+                    const cleanDate = this.sanitizeDateKey(dateKey);
+                    if (!cleanDate) return 0;
+                    return this.tasks.reduce((sum, task) => {
+                        if (excludeTaskId && Number(task?.id) === Number(excludeTaskId)) return sum;
+                        return sum + this.getTaskWorkloadMinutesForDate(task, cleanDate);
+                    }, 0);
+                },
+
+                isWorkdayOverLimitByMinutes(minutes) {
+                    return this.normalizeEstimatedMinutes(minutes) > this.workdayLimitMinutes;
+                },
+
+                isDateOverWorkdayLimit(dateKey) {
+                    return this.isWorkdayOverLimitByMinutes(this.getPlannedMinutesForDate(dateKey));
+                },
+
+                getDayWorkloadSummary(dateKey) {
+                    const plannedMinutes = this.getPlannedMinutesForDate(dateKey);
+                    const limitMinutes = this.workdayLimitMinutes;
+                    return {
+                        plannedMinutes,
+                        limitMinutes,
+                        isOverLimit: plannedMinutes > limitMinutes
+                    };
+                },
+
+                getSelectedDateWorkloadSummary() {
+                    return this.getDayWorkloadSummary(this.selectedDate || this.getTodayKey());
+                },
+
+                getCalendarOverloadedDaysCount() {
+                    return this.getMonthDays().filter(day => day.isCurrentMonth && day.isOverLimit).length;
+                },
+
+                getCalendarVisiblePlannedMinutes() {
+                    return this.getMonthDays()
+                        .filter(day => day.isCurrentMonth)
+                        .reduce((sum, day) => sum + (day.plannedMinutes || 0), 0);
+                },
+
+                getEditingTaskProjectedMinutes() {
+                    const isDone = this.normalizeTaskStatus(this.editingTask?.status) === 'gotowe';
+                    const cleanDueDate = this.sanitizeDateKey(this.editingTask?.due_date);
+                    const workloadDate = isDone
+                        ? (this.getTaskDoneDateKey(this.editingTask) || this.getTodayKey())
+                        : cleanDueDate;
+                    if (!workloadDate) {
+                        return {
+                            date: '',
+                            total: 0,
+                            limit: this.workdayLimitMinutes,
+                            over: false
+                        };
+                    }
+
+                    const baseMinutes = this.getPlannedMinutesForDate(workloadDate, this.editingTask?.id || null);
+                    const taskMinutes = this.getTaskEffectiveEstimatedMinutes(this.editingTask);
+                    const totalMinutes = baseMinutes + taskMinutes;
+                    return {
+                        date: workloadDate,
+                        total: totalMinutes,
+                        limit: this.workdayLimitMinutes,
+                        over: totalMinutes > this.workdayLimitMinutes
+                    };
+                },
+
+                getEditingTaskWorkloadLabel() {
+                    const preview = this.getEditingTaskProjectedMinutes();
+                    if (!preview.date) return 'Wybierz termin, aby policzyc obciazenie dnia.';
+                    return `${this.formatDurationMinutes(preview.total)} / ${this.formatDurationMinutes(preview.limit)} limitu`;
                 },
 
                 formatSelectedDateTitle() {
@@ -919,8 +1453,9 @@
                 },
 
                 isTaskOverdue(task) {
-                    const days = this.daysUntilDue(task);
-                    return days !== null && days < 0;
+                    const dueAt = this.getTaskDueDateTime(task);
+                    if (!dueAt) return false;
+                    return Date.now() > dueAt.getTime();
                 },
 
                 isTaskDueToday(task) {
@@ -933,10 +1468,8 @@
                 },
 
                 dueSortValue(task) {
-                    const days = this.daysUntilDue(task);
-                    if (days === null) return 999;
-                    if (days < 0) return -100 + days;
-                    return days;
+                    const dueAt = this.getTaskDueDateTime(task);
+                    return dueAt ? dueAt.getTime() : Number.MAX_SAFE_INTEGER;
                 },
 
                 sortTasksForFocus(tasks) {
@@ -1085,15 +1618,63 @@
                     }[this.normalizeTaskStatus(status)] || status;
                 },
 
+                hasConfiguredSubtaskTimes(subtasks) {
+                    const normalized = this.normalizeSubtasks(subtasks);
+                    return normalized.length > 0 && normalized.every(subtask => this.normalizeSubtaskEstimatedMinutes(subtask?.estimated_time) > 0);
+                },
+
+                hasConfiguredSubtaskPoints(subtasks) {
+                    const normalized = this.normalizeSubtasks(subtasks);
+                    return normalized.length > 0 && normalized.every(subtask => this.normalizeSubtaskPointsWeight(subtask?.points_weight) > 0);
+                },
+
+                getSubtasksTimeSum(subtasks) {
+                    return this.normalizeSubtasks(subtasks).reduce(
+                        (sum, subtask) => sum + this.normalizeSubtaskEstimatedMinutes(subtask?.estimated_time),
+                        0
+                    );
+                },
+
+                getSubtasksPointsSum(subtasks) {
+                    return this.roundScore(this.normalizeSubtasks(subtasks).reduce(
+                        (sum, subtask) => sum + this.normalizeSubtaskPointsWeight(subtask?.points_weight),
+                        0
+                    ));
+                },
+
+                getTaskEffectiveEstimatedMinutes(task) {
+                    const subtasks = this.normalizeSubtasks(task?.subtasks);
+                    if (this.hasConfiguredSubtaskTimes(subtasks)) {
+                        return this.getSubtasksTimeSum(subtasks);
+                    }
+                    return this.normalizeEstimatedMinutes(task?.estimated_time);
+                },
+
+                getTaskEffectivePointsWeight(task) {
+                    const subtasks = this.normalizeSubtasks(task?.subtasks);
+                    if (this.hasConfiguredSubtaskPoints(subtasks)) {
+                        return this.getSubtasksPointsSum(subtasks);
+                    }
+                    return this.normalizePointsWeight(task?.points_weight);
+                },
+
                 getTaskTimeLabel(task) {
-                    return task?.estimated_time > 0 ? `${task.estimated_time} min` : 'bez czasu';
+                    const effectiveTime = this.getTaskEffectiveEstimatedMinutes(task);
+                    const time = effectiveTime > 0 ? `${effectiveTime} min` : 'bez czasu';
+                    const points = `${this.formatScore(this.getTaskEffectivePointsWeight(task))} pkt`;
+                    const dueTime = this.getTaskDueTime(task);
+                    return dueTime ? `${time} • ${points} • do ${dueTime}` : `${time} • ${points}`;
                 },
 
                 getTaskUrgencyLabel(task) {
                     const days = this.daysUntilDue(task);
                     if (days === null) return this.hasPriority(task) ? 'priorytet' : '';
-                    if (days < 0) return `${Math.abs(days)} d. po terminie`;
-                    if (days === 0) return 'na dzis';
+                    if (this.isTaskOverdue(task)) {
+                        if (days < 0) return `${Math.abs(days)} d. po terminie`;
+                        return 'po terminie';
+                    }
+                    const dueTime = this.getTaskDueTime(task);
+                    if (days === 0) return dueTime ? `na dzis ${dueTime}` : 'na dzis';
                     if (days === 1) return 'jutro';
                     if (days <= 7) return `za ${days} dni`;
                     return 'zaplanowane';
@@ -1101,7 +1682,7 @@
 
                 getUrgencyClass(task) {
                     const days = this.daysUntilDue(task);
-                    if (days !== null && days < 0) return 'bg-red-50 text-red-600';
+                    if (this.isTaskOverdue(task)) return 'bg-red-50 text-red-600';
                     if (days === 0) return 'bg-amber-50 text-amber-700';
                     if (this.normalizePriorityValue(task?.priority) === 'P1') return 'bg-rose-50 text-rose-600';
                     if (days !== null && days <= 7) return 'bg-cyan-50 text-cyan-700';
@@ -1118,7 +1699,7 @@
                 },
 
                 setDailyGoalPrompt() {
-                    const value = prompt('Dzienny cel (liczba zadan):', String(this.dailyGoal));
+                    const value = prompt('Dzienny cel (punkty):', String(this.dailyGoal));
                     if (value === null) return;
                     const next = Number(value);
                     if (!Number.isFinite(next) || next <= 0) {
@@ -1135,9 +1716,105 @@
                     return this.dateToKey(date);
                 },
 
-                getDoneCountByDate(dateKey) {
+                getSubtaskDoneDateKey(subtask) {
+                    if (!subtask?.done || !subtask?.done_at) return '';
+                    const doneAt = new Date(subtask.done_at);
+                    if (Number.isNaN(doneAt.getTime())) return '';
+                    return this.dateToKey(doneAt);
+                },
+
+                getTaskPointsByDate(task, dateKey) {
+                    const taskWeight = this.getTaskEffectivePointsWeight(task);
+                    const subtasks = this.normalizeSubtasks(task?.subtasks);
+                    if (subtasks.length > 0) {
+                        const hasConfiguredPoints = this.hasConfiguredSubtaskPoints(subtasks);
+                        const piece = hasConfiguredPoints ? 0 : (taskWeight / subtasks.length);
+                        return subtasks.reduce((sum, subtask) => {
+                            const doneDateKey = this.getSubtaskDoneDateKey(subtask);
+                            if (doneDateKey !== dateKey) return sum;
+                            if (hasConfiguredPoints) {
+                                return sum + this.normalizeSubtaskPointsWeight(subtask?.points_weight);
+                            }
+                            return sum + piece;
+                        }, 0);
+                    }
+
                     const stamp = `[Done: ${dateKey}]`;
-                    return this.tasks.filter(task => task.status === 'gotowe' && (task.description || '').includes(stamp)).length;
+                    return task?.status === 'gotowe' && (task?.description || '').includes(stamp) ? taskWeight : 0;
+                },
+
+                hasDoneStamp(task) {
+                    const description = (task?.description || '').toString();
+                    return /\[Done:\s*\d{4}-\d{2}-\d{2}\]/.test(description);
+                },
+
+                getHistoricalTaskPointsFraction(task) {
+                    const subtasks = this.normalizeSubtasks(task?.subtasks);
+                    if (subtasks.length > 0) {
+                        if (this.hasConfiguredSubtaskPoints(subtasks)) {
+                            const donePoints = subtasks.reduce((sum, subtask) => {
+                                const hasHistoryStamp = !!subtask?.done_at;
+                                if (!(subtask?.done || hasHistoryStamp)) return sum;
+                                return sum + this.normalizeSubtaskPointsWeight(subtask?.points_weight);
+                            }, 0);
+                            const totalPoints = this.getSubtasksPointsSum(subtasks);
+                            if (totalPoints <= 0) return 0;
+                            return Math.min(1, donePoints / totalPoints);
+                        }
+                        const doneCount = subtasks.reduce((count, subtask) => {
+                            const hasHistoryStamp = !!subtask?.done_at;
+                            return count + (subtask?.done || hasHistoryStamp ? 1 : 0);
+                        }, 0);
+                        return Math.min(1, doneCount / subtasks.length);
+                    }
+                    if (this.normalizeTaskStatus(task?.status) === 'gotowe' || this.hasDoneStamp(task)) return 1;
+                    return 0;
+                },
+
+                getHistoricalEarnedPoints() {
+                    const total = this.tasks.reduce((sum, task) => {
+                        const weight = this.getTaskEffectivePointsWeight(task);
+                        return sum + (weight * this.getHistoricalTaskPointsFraction(task));
+                    }, 0);
+                    return this.roundScore(total);
+                },
+
+                getRewardEarnedPoints() {
+                    return this.roundScore(Math.max(
+                        Number(this.rewardSummary?.earned_points || 0),
+                        this.getHistoricalEarnedPoints()
+                    ));
+                },
+
+                getRewardSpentPoints() {
+                    const earned = this.getRewardEarnedPoints();
+                    const spent = this.roundScore(Number(this.rewardSummary?.spent_points || 0));
+                    return this.roundScore(Math.min(earned, spent));
+                },
+
+                getRewardAvailablePoints() {
+                    const earned = this.getRewardEarnedPoints();
+                    const spent = this.getRewardSpentPoints();
+                    return this.roundScore(Math.max(0, earned - spent));
+                },
+
+                getRewardAvailableBudgetPln() {
+                    return this.getRewardAvailablePoints();
+                },
+
+                roundScore(value) {
+                    return Math.round((Number(value) || 0) * 100) / 100;
+                },
+
+                formatScore(value) {
+                    const rounded = this.roundScore(value);
+                    if (Number.isInteger(rounded)) return String(rounded);
+                    return rounded.toFixed(2).replace(/\.?0+$/, '');
+                },
+
+                getDoneCountByDate(dateKey) {
+                    const total = this.tasks.reduce((sum, task) => sum + this.getTaskPointsByDate(task, dateKey), 0);
+                    return this.roundScore(total);
                 },
 
                 getTodayDoneCount() {
@@ -1168,7 +1845,7 @@
                     if (done <= 0) return 'Pierwszy ruch odpala dzien';
                     if (done >= this.dailyGoal) return 'Cel dnia zamkniety';
                     const left = Math.max(0, this.dailyGoal - done);
-                    return left === 1 ? 'Jeszcze 1 i cel siada' : `Jeszcze ${left} do celu`;
+                    return left === 1 ? 'Jeszcze 1 i cel siada' : `Jeszcze ${this.formatScore(left)} do celu`;
                 },
 
                 getWeeklyDoneTotal() {
@@ -1177,7 +1854,7 @@
                     for (let offset = 0; offset < 7; offset++) {
                         total += this.getDoneCountByDate(this.shiftDateKey(today, -offset));
                     }
-                    return total;
+                    return this.roundScore(total);
                 },
 
                 getWeeklyGoalDots() {
@@ -1187,6 +1864,7 @@
                     for (let offset = 6; offset >= 0; offset--) {
                         const dateKey = this.shiftDateKey(today, -offset);
                         const done = this.getDoneCountByDate(dateKey);
+                        const rawPercent = this.dailyGoal > 0 ? Math.round((done / this.dailyGoal) * 100) : 0;
                         const ratio = this.dailyGoal > 0 ? Math.min(1, done / this.dailyGoal) : 0;
                         const percent = Math.round(ratio * 100);
                         const date = this.keyToDate(dateKey);
@@ -1195,6 +1873,7 @@
                             done,
                             ratio,
                             percent,
+                            rawPercent,
                             isToday: dateKey === realToday,
                             weekday: new Intl.DateTimeFormat('pl-PL', { weekday: 'short' }).format(date),
                             dayNumber: date.getDate()
@@ -1223,6 +1902,7 @@
                 },
 
                 getDopamineDotClass(done) {
+                    if (done > this.dailyGoal) return 'dopamine-dot-over';
                     if (done >= this.dailyGoal) return 'dopamine-dot-full';
                     if (done >= Math.max(1, Math.ceil(this.dailyGoal * 0.6))) return 'dopamine-dot-good';
                     if (done > 0) return 'dopamine-dot-low';
@@ -1232,6 +1912,12 @@
                 getDopamineDotStyle(day) {
                     const percent = Math.max(0, Math.min(100, Number(day?.percent || 0)));
                     return `--dopamine-progress: ${percent};`;
+                },
+
+                getDopaminePercentLabel(day) {
+                    const rawPercent = Math.max(0, Number(day?.rawPercent || 0));
+                    if (rawPercent > 100) return '';
+                    return `${rawPercent}%`;
                 },
 
                 getGoalDotRingClass(percent) {
@@ -1333,6 +2019,14 @@
                         return [{
                             moduleId: this.activeModule ? this.activeModule.id : 0,
                             moduleName: this.activeModule ? this.activeModule.name : 'Modul',
+                            tasks
+                        }];
+                    }
+
+                    if (status !== 'gotowe') {
+                        return [{
+                            moduleId: 0,
+                            moduleName: '',
                             tasks
                         }];
                     }
@@ -1449,14 +2143,25 @@
                 },
 
                 pickTaskPayload(task) {
+                    const dueDate = this.sanitizeDateKey(task.due_date);
+                    const dueTime = dueDate ? this.sanitizeDueTime(task.due_time, '14:00') : '';
                     return {
                         name: task.name,
                         module_id: Number(task.module_id) || 0,
                         priority: this.normalizePriorityValue(task.priority),
                         description: task.description || '',
-                        due_date: this.sanitizeDateKey(task.due_date),
-                        estimated_time: Math.max(0, Number(task.estimated_time) || 0),
-                        status: this.normalizeTaskStatus(task.status)
+                        due_date: dueDate,
+                        due_time: dueTime,
+                        estimated_time: this.normalizeEstimatedMinutes(task.estimated_time) || 15,
+                        points_weight: this.normalizePointsWeight(task.points_weight),
+                        status: this.normalizeTaskStatus(task.status),
+                        subtasks: this.normalizeSubtasks(task.subtasks).map(subtask => ({
+                            id: subtask.id,
+                            title: subtask.title,
+                            done: !!subtask.done,
+                            estimated_time: this.normalizeSubtaskEstimatedMinutes(subtask.estimated_time),
+                            points_weight: this.normalizeSubtaskPointsWeight(subtask.points_weight)
+                        }))
                     };
                 },
 
@@ -1473,6 +2178,16 @@
                     const payload = { status: nextStatus };
                     if (nextStatus === 'gotowe') {
                         payload.description = this.buildDoneDescription(task.description);
+                        const subtasks = this.normalizeSubtasks(task.subtasks);
+                        if (subtasks.length > 0) {
+                            payload.subtasks = subtasks.map(subtask => ({
+                                id: subtask.id,
+                                title: subtask.title,
+                                done: true,
+                                estimated_time: this.normalizeSubtaskEstimatedMinutes(subtask.estimated_time),
+                                points_weight: this.normalizeSubtaskPointsWeight(subtask.points_weight)
+                            }));
+                        }
                     }
                     await this.patchTask(task.id, payload);
                     await this.init();
@@ -1615,60 +2330,186 @@
                         module_id: targetModuleId,
                         description: '',
                         due_date: '',
-                        estimated_time: 0,
+                        due_time: '14:00',
+                        estimated_time: 15,
+                        points_weight: 1,
                         priority: '',
-                        status: 'oczekujace'
+                        status: 'oczekujace',
+                        subtasks: []
                     };
                     this.taskModal = true;
                 },
 
                 openTaskModal(task) {
                     this.isCreatingTask = false;
+                    const baseSubtasks = this.normalizeSubtasks(task?.subtasks);
+                    const needsLegacySubtaskDefaults = baseSubtasks.length > 0 && (
+                        !this.hasConfiguredSubtaskTimes(baseSubtasks) || !this.hasConfiguredSubtaskPoints(baseSubtasks)
+                    );
+                    const fallbackTaskMinutes = this.normalizeEstimatedMinutes(task?.estimated_time) || 15;
+                    const fallbackTaskPoints = this.normalizePointsWeight(task?.points_weight);
+                    const fallbackSubtaskMinutes = Math.max(1, Math.round(fallbackTaskMinutes / Math.max(1, baseSubtasks.length)));
+                    const fallbackSubtaskPoints = this.roundScore(fallbackTaskPoints / Math.max(1, baseSubtasks.length));
+                    const normalizedSubtasks = needsLegacySubtaskDefaults
+                        ? baseSubtasks.map(subtask => ({
+                            ...subtask,
+                            estimated_time: this.normalizeSubtaskEstimatedMinutes(subtask?.estimated_time) || fallbackSubtaskMinutes,
+                            points_weight: this.normalizeSubtaskPointsWeight(subtask?.points_weight) || fallbackSubtaskPoints
+                        }))
+                        : baseSubtasks;
+
+                    const effectiveMinutes = this.hasConfiguredSubtaskTimes(normalizedSubtasks)
+                        ? this.getSubtasksTimeSum(normalizedSubtasks)
+                        : (this.normalizeEstimatedMinutes(task?.estimated_time) || 15);
+                    const effectivePoints = this.hasConfiguredSubtaskPoints(normalizedSubtasks)
+                        ? this.getSubtasksPointsSum(normalizedSubtasks)
+                        : this.normalizePointsWeight(task?.points_weight);
+
                     this.editingTask = {
                         description: '',
                         due_date: '',
-                        estimated_time: 0,
+                        due_time: '14:00',
+                        estimated_time: 15,
+                        points_weight: 1,
                         priority: '',
                         status: 'oczekujace',
+                        subtasks: [],
                         ...task,
                         status: this.normalizeTaskStatus(task?.status),
-                        priority: this.normalizePriorityValue(task?.priority)
+                        priority: this.normalizePriorityValue(task?.priority),
+                        estimated_time: effectiveMinutes,
+                        points_weight: effectivePoints,
+                        due_time: this.sanitizeDueTime(task?.due_time, task?.due_date ? '14:00' : ''),
+                        subtasks: normalizedSubtasks
                     };
                     this.taskModal = true;
                 },
 
+                addEditingSubtask() {
+                    const current = Array.isArray(this.editingTask?.subtasks) ? this.editingTask.subtasks : [];
+                    this.editingTask.subtasks = [...current, this.createSubtaskDraft('')];
+                },
+
+                removeEditingSubtask(index) {
+                    const current = Array.isArray(this.editingTask?.subtasks) ? this.editingTask.subtasks : [];
+                    this.editingTask.subtasks = current.filter((_, itemIndex) => itemIndex !== index);
+                },
+
+                toggleEditingSubtaskDone(subtask, checked) {
+                    if (!subtask) return;
+                    subtask.done = !!checked;
+                    subtask.done_at = subtask.done ? new Date().toISOString() : '';
+                },
+
                 async saveTask() {
-                    const pickedDueDate = this.$refs?.taskDueDateInput?.value || this.editingTask.due_date;
-                    this.editingTask.due_date = this.sanitizeDateKey(pickedDueDate);
-                    const payload = this.pickTaskPayload(this.editingTask);
-                    payload.name = (payload.name || '').trim();
-                    if (!payload.name) {
-                        alert('Podaj nazwe zadania.');
-                        return;
-                    }
+                    try {
+                        const pickedDueDate = this.$refs?.taskDueDateInput?.value || this.editingTask.due_date;
+                        const pickedDueTime = this.$refs?.taskDueTimeInput?.value || this.editingTask.due_time;
+                        this.editingTask.due_date = this.sanitizeDateKey(pickedDueDate);
+                        this.editingTask.due_time = this.editingTask.due_date
+                            ? this.sanitizeDueTime(pickedDueTime, '14:00')
+                            : '';
+                        this.editingTask.estimated_time = this.normalizeEstimatedMinutes(this.editingTask.estimated_time) || 15;
+                        this.editingTask.points_weight = this.normalizePointsWeight(this.editingTask.points_weight);
+                        this.editingTask.subtasks = this.normalizeSubtasks(this.editingTask.subtasks);
+                        const payload = this.pickTaskPayload(this.editingTask);
+                        const subtasks = this.normalizeSubtasks(payload.subtasks);
+                        if (subtasks.length > 0) {
+                            for (let index = 0; index < subtasks.length; index++) {
+                                const subtask = subtasks[index];
+                                const subtaskMinutes = this.normalizeSubtaskEstimatedMinutes(subtask.estimated_time);
+                                const subtaskPoints = this.normalizeSubtaskPointsWeight(subtask.points_weight);
+                                if (subtaskMinutes <= 0) {
+                                    alert(`Podzadanie #${index + 1} musi miec czas wiekszy od 0 minut.`);
+                                    return;
+                                }
+                                if (subtaskPoints <= 0) {
+                                    alert(`Podzadanie #${index + 1} musi miec punkty wieksze od 0.`);
+                                    return;
+                                }
+                            }
+                            payload.estimated_time = this.getSubtasksTimeSum(subtasks);
+                            payload.points_weight = this.getSubtasksPointsSum(subtasks);
+                            payload.subtasks = subtasks;
+                        }
 
-                    if (!payload.module_id) {
-                        alert('Wybierz modul.');
-                        return;
-                    }
+                        payload.name = (payload.name || '').trim();
+                        if (!payload.name) {
+                            alert('Podaj nazwe zadania.');
+                            return;
+                        }
 
-                    if (payload.status === 'gotowe') {
-                        payload.description = this.buildDoneDescription(payload.description);
-                    }
+                        if (!payload.module_id) {
+                            alert('Wybierz modul.');
+                            return;
+                        }
 
-                    if (this.isCreatingTask || !this.editingTask.id) {
-                        await fetch(`${this.API}/tasks`, {
-                            method: 'POST',
+                        if (payload.estimated_time <= 0) {
+                            alert('Podaj szacowany czas zadania (minuty, wiecej niz 0).');
+                            return;
+                        }
+
+                        payload.points_weight = this.normalizePointsWeight(payload.points_weight);
+                        if (payload.points_weight <= 0) {
+                            alert('Waga zadania musi byc wieksza od 0.');
+                            return;
+                        }
+
+                        if (payload.status === 'gotowe') {
+                            payload.description = this.buildDoneDescription(payload.description);
+                            if (Array.isArray(payload.subtasks) && payload.subtasks.length > 0) {
+                                payload.subtasks = payload.subtasks.map(subtask => ({ ...subtask, done: true }));
+                            }
+                        }
+
+                        const endpoint = this.isCreatingTask || !this.editingTask.id
+                            ? `${this.API}/tasks`
+                            : `${this.API}/tasks/${this.editingTask.id}`;
+                        const method = this.isCreatingTask || !this.editingTask.id ? 'POST' : 'PUT';
+
+                        const sendPayload = async (allowOverflow = false) => fetch(endpoint, {
+                            method,
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify(payload)
+                            body: JSON.stringify({
+                                ...payload,
+                                allow_time_overflow: !!allowOverflow
+                            })
                         });
-                    } else {
-                        await this.patchTask(this.editingTask.id, payload);
-                    }
 
-                    this.taskModal = false;
-                    this.isCreatingTask = false;
-                    await this.init();
+                        let response = await sendPayload(false);
+                        if (response.status === 409) {
+                            let detail = null;
+                            try {
+                                const payloadError = await response.json();
+                                detail = payloadError?.detail || null;
+                            } catch (error) {
+                                detail = null;
+                            }
+
+                            const projected = this.getEditingTaskProjectedMinutes();
+                            const defaultMessage = projected.date
+                                ? `Plan na ${projected.date} przekroczy limit 8h (${this.formatDurationMinutes(projected.total)}).`
+                                : 'Przekroczysz limit 8h na ten dzien.';
+                            const warningMessage = typeof detail === 'object' && detail?.message
+                                ? detail.message
+                                : defaultMessage;
+
+                            const acceptOverflow = confirm(`${warningMessage}\n\nKliknij OK, aby zapisac mimo to.`);
+                            if (!acceptOverflow) return;
+                            response = await sendPayload(true);
+                        }
+
+                        if (!response.ok) {
+                            alert(await this.getApiErrorMessage(response, 'Nie udalo sie zapisac zadania.'));
+                            return;
+                        }
+
+                        this.taskModal = false;
+                        this.isCreatingTask = false;
+                        await this.init();
+                    } catch (error) {
+                        alert('Nie udalo sie zapisac zadania. Sprawdz polaczenie z backendem i odswiez strone.');
+                    }
                 },
 
                 async removeEditingTask() {
@@ -1785,6 +2626,53 @@
 
                 clampCanvasValue(value, min, max) {
                     return Math.min(max, Math.max(min, value));
+                },
+
+                clampCanvasZoom(value) {
+                    const min = Number(this.canvasMinZoom) || 0.35;
+                    const max = Number(this.canvasMaxZoom) || 2.5;
+                    const numeric = Number(value);
+                    const fallback = Number(this.canvasZoom) || 1;
+                    const safeValue = Number.isFinite(numeric) ? numeric : fallback;
+                    return this.clampCanvasValue(safeValue, min, max);
+                },
+
+                getCanvasStageStyle() {
+                    const zoom = this.clampCanvasZoom(this.canvasZoom || 1);
+                    const width = Math.round(this.canvasBoardWidth * zoom);
+                    const height = Math.round(this.canvasBoardHeight * zoom);
+                    return `width:${width}px;height:${height}px;min-height:${height}px;`;
+                },
+
+                getCanvasBoardStyle() {
+                    const zoom = this.clampCanvasZoom(this.canvasZoom || 1);
+                    return `width:${this.canvasBoardWidth}px;height:${this.canvasBoardHeight}px;min-height:${this.canvasBoardHeight}px;transform:scale(${zoom});transform-origin:top left;`;
+                },
+
+                handleCanvasViewportWheel(event) {
+                    if (!event?.ctrlKey) return;
+                    const viewport = this.$refs?.canvasViewport;
+                    if (!viewport) return;
+                    event.preventDefault();
+
+                    const currentZoom = this.clampCanvasZoom(this.canvasZoom || 1);
+                    const zoomStep = event.deltaY < 0 ? 1.12 : 0.88;
+                    const nextZoom = this.clampCanvasZoom(currentZoom * zoomStep);
+                    if (nextZoom === currentZoom) return;
+
+                    const rect = viewport.getBoundingClientRect();
+                    const pointerX = event.clientX - rect.left;
+                    const pointerY = event.clientY - rect.top;
+                    const worldX = (viewport.scrollLeft + pointerX) / currentZoom;
+                    const worldY = (viewport.scrollTop + pointerY) / currentZoom;
+
+                    this.canvasZoom = nextZoom;
+                    viewport.scrollLeft = Math.max(0, (worldX * nextZoom) - pointerX);
+                    viewport.scrollTop = Math.max(0, (worldY * nextZoom) - pointerY);
+                },
+
+                resetCanvasZoom() {
+                    this.canvasZoom = 1;
                 },
 
                 makeCanvasItemId(prefix = 'node') {
@@ -1966,9 +2854,23 @@
                         const y1 = fromCenterY + ((dy / length) * offsetFrom);
                         const x2 = toCenterX - ((dx / length) * offsetTo);
                         const y2 = toCenterY - ((dy / length) * offsetTo);
-                        const color = this.getCanvasColorMeta(link.color).swatch;
+                        const colorMeta = this.getCanvasColorMeta(link.color);
+                        const color = colorMeta.line || colorMeta.swatch;
+                        const ux = dx / length;
+                        const uy = dy / length;
+                        const headLength = 11;
+                        const headWidth = 4.8;
+                        const lineX2 = x2 - (ux * headLength);
+                        const lineY2 = y2 - (uy * headLength);
+                        const baseX = x2 - (ux * headLength);
+                        const baseY = y2 - (uy * headLength);
+                        const leftX = baseX - (uy * headWidth);
+                        const leftY = baseY + (ux * headWidth);
+                        const rightX = baseX + (uy * headWidth);
+                        const rightY = baseY - (ux * headWidth);
+                        const headPoints = `${x2},${y2} ${leftX},${leftY} ${rightX},${rightY}`;
 
-                        return { ...link, x1, y1, x2, y2, color };
+                        return { ...link, x1, y1, x2, y2, lineX2, lineY2, headPoints, color };
                     }).filter(Boolean);
                 },
 
@@ -2044,8 +2946,9 @@
                     const bounds = this.getCanvasShapeBounds(cleanShape);
                     const dimensions = this.coerceCanvasDimensions(cleanShape, bounds.defaultWidth, bounds.defaultHeight);
                     const viewport = this.$refs?.canvasViewport;
-                    const baseX = viewport ? (viewport.scrollLeft + (viewport.clientWidth * 0.28)) : 120;
-                    const baseY = viewport ? (viewport.scrollTop + (viewport.clientHeight * 0.24)) : 120;
+                    const zoom = this.clampCanvasZoom(this.canvasZoom || 1);
+                    const baseX = viewport ? ((viewport.scrollLeft + (viewport.clientWidth * 0.28)) / zoom) : 120;
+                    const baseY = viewport ? ((viewport.scrollTop + (viewport.clientHeight * 0.24)) / zoom) : 120;
                     const offset = (this.canvasNodes.length * 26) % 220;
                     const maxX = Math.max(0, this.canvasBoardWidth - dimensions.width - 10);
                     const maxY = Math.max(0, this.canvasBoardHeight - dimensions.height - 10);
@@ -2167,8 +3070,27 @@
                     this.saveCanvasBoard();
                 },
 
+                startCanvasNodePointer(node, event) {
+                    if (!node || !event) return;
+                    if (event.button === 2) {
+                        this.startCanvasPan(event);
+                        return;
+                    }
+                    if (event.button !== 0) return;
+
+                    const tagName = event?.target?.tagName?.toLowerCase();
+                    if (tagName === 'textarea' || tagName === 'button' || tagName === 'input' || tagName === 'select' || tagName === 'option') return;
+
+                    this.startCanvasDrag(node, event);
+                },
+
                 startCanvasDrag(node, event) {
-                    if (!node || !event || event.button !== 0) return;
+                    if (!node || !event) return;
+                    if (event.button === 2) {
+                        this.startCanvasPan(event);
+                        return;
+                    }
+                    if (event.button !== 0) return;
                     if (this.canvasLinkDraftFromId) return;
                     const id = String(node.id);
                     const topLayer = this.canvasNodes.reduce((max, item) => Math.max(max, Number(item.z) || 0), 0) + 1;
@@ -2188,8 +3110,28 @@
                     event.preventDefault();
                 },
 
+                startCanvasPan(event) {
+                    if (!event || event.button !== 2) return false;
+                    const viewport = this.$refs?.canvasViewport;
+                    if (!viewport) return false;
+                    this.canvasPointerAction = {
+                        mode: 'pan',
+                        startX: event.clientX,
+                        startY: event.clientY,
+                        scrollLeft: viewport.scrollLeft,
+                        scrollTop: viewport.scrollTop
+                    };
+                    event.preventDefault();
+                    return true;
+                },
+
                 startCanvasResize(node, event) {
-                    if (!node || !event || event.button !== 0) return;
+                    if (!node || !event) return;
+                    if (event.button === 2) {
+                        this.startCanvasPan(event);
+                        return;
+                    }
+                    if (event.button !== 0) return;
                     const id = String(node.id);
                     this.selectedCanvasNodeId = id;
                     this.selectedCanvasLinkId = null;
@@ -2220,6 +3162,11 @@
                 },
 
                 handleCanvasBoardPointerDown(event) {
+                    if (event?.button === 2) {
+                        this.startCanvasPan(event);
+                        return;
+                    }
+                    if (event?.button !== 0) return;
                     const tagName = event?.target?.tagName?.toLowerCase();
                     if (event?.target === event?.currentTarget || tagName === 'svg') {
                         this.clearCanvasSelection();
@@ -2229,12 +3176,24 @@
                 moveCanvasDrag(event) {
                     if (!this.canvasPointerAction || !event) return;
                     const action = this.canvasPointerAction;
+                    if (action.mode === 'pan') {
+                        const viewport = this.$refs?.canvasViewport;
+                        if (!viewport) return;
+                        const deltaX = event.clientX - action.startX;
+                        const deltaY = event.clientY - action.startY;
+                        viewport.scrollLeft = Math.max(0, action.scrollLeft - deltaX);
+                        viewport.scrollTop = Math.max(0, action.scrollTop - deltaY);
+                        event.preventDefault();
+                        return;
+                    }
+
                     const node = this.getCanvasNodeById(action.id);
                     if (!node) return;
+                    const zoom = this.clampCanvasZoom(this.canvasZoom || 1);
 
                     if (action.mode === 'drag') {
-                        let nextX = action.nodeX + (event.clientX - action.startX);
-                        let nextY = action.nodeY + (event.clientY - action.startY);
+                        let nextX = action.nodeX + ((event.clientX - action.startX) / zoom);
+                        let nextY = action.nodeY + ((event.clientY - action.startY) / zoom);
                         if (this.canvasSnapToGrid) {
                             nextX = Math.round(nextX / 28) * 28;
                             nextY = Math.round(nextY / 28) * 28;
@@ -2251,8 +3210,8 @@
 
                     if (action.mode === 'resize') {
                         const bounds = this.getCanvasShapeBounds(node.shape);
-                        let nextWidth = action.width + (event.clientX - action.startX);
-                        let nextHeight = action.height + (event.clientY - action.startY);
+                        let nextWidth = action.width + ((event.clientX - action.startX) / zoom);
+                        let nextHeight = action.height + ((event.clientY - action.startY) / zoom);
                         if (this.canvasSnapToGrid) {
                             nextWidth = Math.round(nextWidth / 14) * 14;
                             nextHeight = Math.round(nextHeight / 14) * 14;
@@ -2270,8 +3229,9 @@
 
                 endCanvasDrag() {
                     if (!this.canvasPointerAction) return;
+                    const shouldSave = this.canvasPointerAction.mode === 'drag' || this.canvasPointerAction.mode === 'resize';
                     this.canvasPointerAction = null;
-                    this.saveCanvasBoard();
+                    if (shouldSave) this.saveCanvasBoard();
                 },
 
                 clearCanvasBoard() {
@@ -2366,11 +3326,86 @@
                     }
                     try {
                         const payload = await response.json();
-                        if (payload?.detail && payload.detail !== 'Not Found') return payload.detail;
+                        if (payload?.detail && payload.detail !== 'Not Found') {
+                            if (typeof payload.detail === 'string') return payload.detail;
+                            if (typeof payload.detail === 'object' && payload.detail?.message) return payload.detail.message;
+                        }
                     } catch (error) {
                         /* response was not JSON */
                     }
                     return fallback;
+                },
+
+                async resetRewardWallet() {
+                    if (!confirm('Wyzerowac dostepny budzet punktowy po zakupie nagrody?')) return;
+                    const response = await fetch(`${this.API}/rewards/reset`, { method: 'POST' });
+                    if (!response.ok) {
+                        alert(await this.getApiErrorMessage(response, 'Nie udalo sie zresetowac portfela punktow.'));
+                        return;
+                    }
+                    const payload = await response.json();
+                    this.rewardSummary = {
+                        earned_points: this.roundScore(payload?.earned_points || 0),
+                        spent_points: this.roundScore(payload?.spent_points || 0),
+                        available_points: this.roundScore(payload?.available_points || 0),
+                        available_budget_pln: this.roundScore(payload?.available_budget_pln || 0),
+                        point_value_pln: Number(payload?.point_value_pln) || 1
+                    };
+                },
+
+                async addMedication() {
+                    const name = (this.newMedication.name || '').trim();
+                    if (!name) {
+                        alert('Podaj nazwe leku.');
+                        return;
+                    }
+
+                    const response = await fetch(`${this.API}/medications`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            name,
+                            schedule_type: this.normalizeMedicationScheduleType(this.newMedication.schedule_type),
+                            reminder_time: this.sanitizeDueTime(this.newMedication.reminder_time, '08:00') || '08:00'
+                        })
+                    });
+
+                    if (!response.ok) {
+                        alert(await this.getApiErrorMessage(response, 'Nie udalo sie dodac leku.'));
+                        return;
+                    }
+
+                    this.resetMedicationDraft();
+                    await this.loadMedications();
+                },
+
+                async toggleMedicationDone(medication, checked) {
+                    if (!medication || !medication.scheduled_today) return;
+                    const response = await fetch(`${this.API}/medications/${medication.id}/state`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            date_key: this.medicationsDate || this.getTodayKey(),
+                            done: !!checked
+                        })
+                    });
+
+                    if (!response.ok) {
+                        alert(await this.getApiErrorMessage(response, 'Nie udalo sie odhaczyc leku.'));
+                        return;
+                    }
+
+                    await this.loadMedications();
+                },
+
+                async deleteMedication(medicationId) {
+                    if (!confirm('Usunac to przypomnienie o leku?')) return;
+                    const response = await fetch(`${this.API}/medications/${medicationId}`, { method: 'DELETE' });
+                    if (!response.ok) {
+                        alert(await this.getApiErrorMessage(response, 'Nie udalo sie usunac leku.'));
+                        return;
+                    }
+                    await this.loadMedications();
                 },
 
                 async addMonthlyTask() {
@@ -2379,13 +3414,16 @@
                         alert('Podaj nazwe zadania miesiecznego.');
                         return;
                     }
+                    const repeatType = this.normalizeMonthlyRepeatType(this.newMonthlyTaskRepeatType);
 
                     const response = await fetch(`${this.API}/monthly-tasks`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
                             name,
-                            due_day: this.normalizeMonthlyDueDay(this.newMonthlyTaskDueDay)
+                            due_day: repeatType === 'monthly' ? this.normalizeMonthlyDueDay(this.newMonthlyTaskDueDay) : 0,
+                            repeat_type: repeatType,
+                            repeat_weekday: this.normalizeMonthlyRepeatWeekday(this.newMonthlyTaskRepeatWeekday)
                         })
                     });
 
@@ -2406,13 +3444,16 @@
                         await this.loadMonthlyTasks();
                         return;
                     }
+                    const repeatType = this.normalizeMonthlyRepeatType(task.repeat_type);
 
                     const response = await fetch(`${this.API}/monthly-tasks/${task.id}`, {
                         method: 'PUT',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
                             name,
-                            due_day: this.normalizeMonthlyDueDay(task.due_day)
+                            due_day: repeatType === 'monthly' ? this.normalizeMonthlyDueDay(task.due_day) : 0,
+                            repeat_type: repeatType,
+                            repeat_weekday: this.normalizeMonthlyRepeatWeekday(task.repeat_weekday)
                         })
                     });
 
@@ -2429,7 +3470,7 @@
                         method: 'PUT',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
-                            month_key: this.monthlyMonthKey || this.getCurrentMonthKey(),
+                            month_key: task.state_key || this.monthlyMonthKey || this.getCurrentMonthKey(),
                             done: !task.done,
                             note: task.note || ''
                         })
@@ -2449,7 +3490,7 @@
                         method: 'PUT',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
-                            month_key: this.monthlyMonthKey || this.getCurrentMonthKey(),
+                            month_key: task.state_key || this.monthlyMonthKey || this.getCurrentMonthKey(),
                             done: !!task.done,
                             note: task.note || ''
                         })
@@ -2640,13 +3681,29 @@
                 },
 
                 getTasksForDate(dateKey) {
-                    return this.sortTasksForFocus(
-                        this.getOpenTasks().filter(task => task.due_date === dateKey)
-                    );
+                    const tasks = this.getOpenTasks().filter(task => task.due_date === dateKey);
+                    return [...tasks].sort((a, b) => {
+                        const aTime = this.getTaskDueTime(a) || '99:99';
+                        const bTime = this.getTaskDueTime(b) || '99:99';
+                        const timeDiff = aTime.localeCompare(bTime, 'pl');
+                        if (timeDiff !== 0) return timeDiff;
+
+                        const priorityDiff = this.priorityRank(a.priority) - this.priorityRank(b.priority);
+                        if (priorityDiff !== 0) return priorityDiff;
+
+                        const statusDiff = this.statusRank(a.status) - this.statusRank(b.status);
+                        if (statusDiff !== 0) return statusDiff;
+
+                        return (a.name || '').localeCompare((b.name || ''), 'pl');
+                    });
                 },
 
                 getSelectedDateTasks() {
                     return this.getTasksForDate(this.selectedDate || this.getTodayKey());
+                },
+
+                getSelectedDateEntries() {
+                    return this.getCalendarAgendaEntriesForDate(this.selectedDate || this.getTodayKey());
                 },
 
                 getStartOfWeek(date) {
@@ -2686,6 +3743,7 @@
                         date.setDate(gridStart.getDate() + index);
                         const dateKey = this.dateToKey(date);
                         const entries = this.getCalendarEntriesForDate(dateKey);
+                        const workload = this.getDayWorkloadSummary(dateKey);
                         days.push({
                             dateKey,
                             dayNumber: date.getDate(),
@@ -2694,6 +3752,8 @@
                             isToday: dateKey === this.getTodayKey(),
                             isSelected: dateKey === this.selectedDate,
                             entries,
+                            plannedMinutes: workload.plannedMinutes,
+                            isOverLimit: workload.isOverLimit,
                             total: entries.length
                         });
                     }
