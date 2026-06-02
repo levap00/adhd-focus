@@ -302,3 +302,7 @@ def _init_db_for_path(db_path: Path) -> None:
 def init_db() -> None:
     for db_path in list_unique_db_paths():
         _init_db_for_path(db_path)
+
+
+def init_db_for_username(username: str) -> None:
+    _init_db_for_path(get_db_path_for_username(username))

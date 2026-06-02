@@ -11,7 +11,8 @@ from dotenv import load_dotenv
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
-from backend.accounts import ACCOUNTS, ACCOUNTS_BY_USERNAME
+from backend.accounts import ACCOUNTS_DB_PATH, get_user_by_username, user_exists
+from backend.passwords import get_password_hash, verify_password
 
 load_dotenv()
 
@@ -19,8 +20,7 @@ SESSION_COOKIE_NAME = os.getenv("FOCUS_SESSION_COOKIE_NAME", "focus_session")
 SESSION_COOKIE_SECURE_MODE = (os.getenv("FOCUS_COOKIE_SECURE", "auto") or "auto").strip().lower()
 SESSION_TTL_SECONDS = max(300, int(os.getenv("FOCUS_SESSION_TTL_SECONDS", "43200")))
 SESSION_REMEMBER_TTL_SECONDS = max(300, int(os.getenv("FOCUS_SESSION_REMEMBER_TTL_SECONDS", "2592000")))
-_SESSION_SEED = "|".join(f"{account.username}:{account.password}" for account in ACCOUNTS)
-SESSION_SECRET = os.getenv("FOCUS_SESSION_SECRET", f"{_SESSION_SEED}:focus-session-secret")
+SESSION_SECRET = os.getenv("FOCUS_SESSION_SECRET", f"{ACCOUNTS_DB_PATH}:focus-session-secret")
 
 security = HTTPBasic(auto_error=False)
 _current_request_user: ContextVar[Optional[str]] = ContextVar("current_request_user", default=None)
@@ -46,11 +46,13 @@ def authenticate_credentials(username: str, password: str) -> bool:
 
 
 def resolve_authenticated_username(username: str, password: str) -> Optional[str]:
-    username = username or ""
-    password = password or ""
-    for account in ACCOUNTS:
-        if secrets.compare_digest(username, account.username) and secrets.compare_digest(password, account.password):
-            return account.username
+    username = (username or "").strip()
+    account = get_user_by_username(username)
+    if not account:
+        return None
+
+    if secrets.compare_digest(username, account.username) and verify_password(password, account.hashed_password):
+        return account.username
     return None
 
 
@@ -105,7 +107,7 @@ def decode_session_token(token: str) -> Optional[str]:
     if not secrets.compare_digest(signature, _sign_payload(payload)):
         return None
 
-    if username not in ACCOUNTS_BY_USERNAME:
+    if not user_exists(username):
         return None
 
     return username

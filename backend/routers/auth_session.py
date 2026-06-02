@@ -1,8 +1,10 @@
 from urllib.parse import parse_qs
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
+from pydantic import ValidationError
 
+from backend.accounts import InvalidInviteCode, UsernameAlreadyExists, register_user
 from backend.auth import (
     SESSION_COOKIE_NAME,
     SESSION_REMEMBER_TTL_SECONDS,
@@ -12,14 +14,22 @@ from backend.auth import (
     resolve_authenticated_username,
     should_set_secure_cookie,
 )
+from backend.db import init_db_for_username
+from backend.rate_limit import limiter
+from backend.schemas import RegisterPayload, RegisterResponse
 
 router = APIRouter()
 
 
-def _render_login_page(show_error: bool = False) -> str:
+def _render_login_page(show_error: bool = False, show_registered: bool = False) -> str:
     error_block = (
         '<div class="error">Nieprawidlowy login lub haslo. Sprobuj ponownie.</div>'
         if show_error
+        else ""
+    )
+    success_block = (
+        '<div class="success">Konto utworzone. Mozesz sie teraz zalogowac.</div>'
+        if show_registered
         else ""
     )
     return f"""<!DOCTYPE html>
@@ -95,13 +105,38 @@ def _render_login_page(show_error: bool = False) -> str:
       font-size: 0.86rem;
       font-weight: 700;
     }}
+    .success {{
+      margin: 10px 0 4px;
+      border-radius: 12px;
+      background: #ecfdf5;
+      border: 1px solid #bbf7d0;
+      padding: 10px 12px;
+      color: #047857;
+      font-size: 0.86rem;
+      font-weight: 700;
+    }}
     .hint {{ margin-top: 14px; font-size: 0.76rem; color: #64748b; }}
+    .secondary-link {{
+      display: block;
+      margin-top: 12px;
+      border-radius: 14px;
+      border: 1px solid #cbd5e1;
+      padding: 11px 12px;
+      text-align: center;
+      color: #0f172a;
+      font-size: 0.9rem;
+      font-weight: 800;
+      text-decoration: none;
+      background: #ffffff;
+    }}
+    .secondary-link:hover {{ background: #f8fafc; }}
   </style>
 </head>
 <body>
   <main class="card">
     <h1>ADHD Focus OS</h1>
     <p>Zaloguj sie, aby wejsc do planera.</p>
+    {success_block}
     {error_block}
     <form method="post" action="/auth/login" autocomplete="on">
       <label for="username">Login</label>
@@ -117,6 +152,7 @@ def _render_login_page(show_error: bool = False) -> str:
 
       <button type="submit">Zaloguj</button>
     </form>
+    <a class="secondary-link" href="/register">Zarejestruj konto</a>
     <div class="hint">Po zalogowaniu sesja zostanie zapisana w bezpiecznym cookie.</div>
   </main>
 </body>
@@ -124,14 +160,144 @@ def _render_login_page(show_error: bool = False) -> str:
 """
 
 
+def _registration_error_message(error: str) -> str:
+    return {
+        "invite": "Kod zaproszenia jest niepoprawny albo zostal juz uzyty.",
+        "username": "Ta nazwa uzytkownika jest juz zajeta.",
+        "invalid": "Sprawdz login, haslo i kod zaproszenia. Haslo musi miec 8-72 znaki.",
+    }.get(error, "")
+
+
+def _render_register_page(error: str = "") -> str:
+    error_message = _registration_error_message(error)
+    error_block = (
+        f'<div class="error">{error_message}</div>'
+        if error_message
+        else ""
+    )
+    return f"""<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Rejestracja | ADHD Focus OS</title>
+  <style>
+    :root {{ color-scheme: light; }}
+    body {{
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      font-family: "Plus Jakarta Sans", system-ui, sans-serif;
+      background:
+        radial-gradient(circle at 10% 0%, rgba(219, 234, 254, 0.95), transparent 35%),
+        linear-gradient(155deg, #f8fafc 0%, #e0f2fe 55%, #eef2ff 100%);
+      color: #0f172a;
+    }}
+    .card {{
+      width: min(92vw, 430px);
+      border-radius: 24px;
+      border: 1px solid #cbd5e1;
+      background: rgba(255, 255, 255, 0.94);
+      box-shadow: 0 28px 50px rgba(15, 23, 42, 0.16);
+      padding: 28px;
+      backdrop-filter: blur(8px);
+    }}
+    h1 {{ margin: 0 0 6px; font-size: 1.7rem; }}
+    p {{ margin: 0 0 18px; color: #475569; font-size: 0.94rem; }}
+    label {{ display: block; margin-top: 12px; font-weight: 700; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.07em; color: #64748b; }}
+    input[type="text"], input[type="password"] {{
+      width: 100%;
+      margin-top: 6px;
+      padding: 12px 13px;
+      border: 1px solid #cbd5e1;
+      border-radius: 14px;
+      font-size: 0.95rem;
+      outline: none;
+      box-sizing: border-box;
+      background: #f8fafc;
+    }}
+    input:focus {{ border-color: #2563eb; background: #ffffff; }}
+    button {{
+      margin-top: 20px;
+      width: 100%;
+      border: 0;
+      border-radius: 14px;
+      padding: 12px;
+      background: #2563eb;
+      color: white;
+      font-weight: 800;
+      cursor: pointer;
+    }}
+    button:hover {{ background: #1d4ed8; }}
+    .error {{
+      margin: 10px 0 4px;
+      border-radius: 12px;
+      background: #fef2f2;
+      border: 1px solid #fecaca;
+      padding: 10px 12px;
+      color: #b91c1c;
+      font-size: 0.86rem;
+      font-weight: 700;
+    }}
+    .secondary-link {{
+      display: block;
+      margin-top: 12px;
+      border-radius: 14px;
+      border: 1px solid #cbd5e1;
+      padding: 11px 12px;
+      text-align: center;
+      color: #0f172a;
+      font-size: 0.9rem;
+      font-weight: 800;
+      text-decoration: none;
+      background: #ffffff;
+    }}
+    .secondary-link:hover {{ background: #f8fafc; }}
+    .hint {{ margin-top: 14px; font-size: 0.76rem; color: #64748b; line-height: 1.45; }}
+  </style>
+</head>
+<body>
+  <main class="card">
+    <h1>Utworz konto</h1>
+    <p>Wpisz login, haslo i jednorazowy kod zaproszenia.</p>
+    {error_block}
+    <form method="post" action="/auth/register" autocomplete="on">
+      <label for="username">Login</label>
+      <input id="username" name="username" type="text" autocomplete="username" minlength="3" maxlength="64" required />
+
+      <label for="password">Haslo</label>
+      <input id="password" name="password" type="password" autocomplete="new-password" minlength="8" maxlength="72" required />
+
+      <label for="invite_code">Kod zaproszenia</label>
+      <input id="invite_code" name="invite_code" type="text" autocomplete="off" required />
+
+      <button type="submit">Zarejestruj</button>
+    </form>
+    <a class="secondary-link" href="/login">Mam juz konto</a>
+    <div class="hint">Kod zaproszenia dziala tylko raz. Po rejestracji zaloguj sie nowym kontem.</div>
+  </main>
+</body>
+</html>
+"""
+
+
 @router.get("/login", response_class=HTMLResponse)
-def login_page(request: Request, error: int = 0):
+def login_page(request: Request, error: int = 0, registered: int = 0):
     if get_session_user(request):
         return RedirectResponse(url="/", status_code=303)
-    return HTMLResponse(_render_login_page(show_error=bool(error)))
+    return HTMLResponse(_render_login_page(show_error=bool(error), show_registered=bool(registered)))
+
+
+@router.get("/register", response_class=HTMLResponse)
+def register_page(request: Request, error: str = ""):
+    if get_session_user(request):
+        return RedirectResponse(url="/", status_code=303)
+    return HTMLResponse(_render_register_page(error=error))
 
 
 @router.post("/auth/login")
+@limiter.limit("5/minute")
 async def login_submit(request: Request):
     body_raw = (await request.body()).decode("utf-8", errors="ignore")
     form_values = parse_qs(body_raw, keep_blank_values=True)
@@ -157,6 +323,46 @@ async def login_submit(request: Request):
         path="/",
     )
     return response
+
+
+@router.post("/auth/register")
+@limiter.limit("5/minute")
+async def register_form_submit(request: Request):
+    body_raw = (await request.body()).decode("utf-8", errors="ignore")
+    form_values = parse_qs(body_raw, keep_blank_values=True)
+
+    try:
+        payload = RegisterPayload(
+            username=(form_values.get("username", [""])[0] or "").strip(),
+            password=form_values.get("password", [""])[0] or "",
+            invite_code=(form_values.get("invite_code", [""])[0] or "").strip(),
+        )
+        account = register_user(payload.username, payload.password, payload.invite_code)
+    except UsernameAlreadyExists:
+        return RedirectResponse(url="/register?error=username", status_code=303)
+    except InvalidInviteCode:
+        return RedirectResponse(url="/register?error=invite", status_code=303)
+    except (ValidationError, ValueError):
+        return RedirectResponse(url="/register?error=invalid", status_code=303)
+
+    init_db_for_username(account.username)
+    return RedirectResponse(url="/login?registered=1", status_code=303)
+
+
+@router.post("/register", response_model=RegisterResponse, status_code=status.HTTP_201_CREATED)
+@limiter.limit("5/minute")
+def register_submit(request: Request, payload: RegisterPayload):
+    try:
+        account = register_user(payload.username, payload.password, payload.invite_code)
+    except UsernameAlreadyExists as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Nazwa uzytkownika jest juz zajeta.") from exc
+    except InvalidInviteCode as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Kod zaproszenia jest niepoprawny albo zuzyty.") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+    init_db_for_username(account.username)
+    return RegisterResponse(id=account.id, username=account.username)
 
 
 @router.post("/auth/logout")
