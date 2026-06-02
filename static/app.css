@@ -440,6 +440,69 @@ body.theme-dark .task-merge-chip {
     color: #bae6fd;
 }
 
+.shared-task-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    max-width: 100%;
+    border: 1px solid rgba(14, 165, 233, 0.18);
+    border-radius: 999px;
+    background: rgba(240, 249, 255, 0.92);
+    color: #0369a1;
+    font-size: 11px;
+    font-weight: 850;
+    line-height: 1;
+    padding: 0.28rem 0.55rem;
+    text-decoration: none !important;
+    white-space: nowrap;
+}
+
+.shared-task-badge-compact {
+    font-size: 10px;
+    padding: 0.18rem 0.42rem;
+}
+
+.shared-task-badge-calendar {
+    margin-left: 0.2rem;
+    max-width: 100%;
+    font-size: 9px;
+    padding: 0.12rem 0.32rem;
+    vertical-align: middle;
+}
+
+.shared-task-icon-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.35rem;
+    height: 1.35rem;
+    border: 1px solid rgba(14, 165, 233, 0.18);
+    border-radius: 999px;
+    background: rgba(240, 249, 255, 0.95);
+    color: #0369a1;
+    font-size: 11px;
+    line-height: 1;
+    transition: transform 0.14s ease, background 0.14s ease, border-color 0.14s ease;
+}
+
+.shared-task-icon-button:hover {
+    transform: translateY(-1px);
+    border-color: rgba(14, 165, 233, 0.35);
+    background: rgba(224, 242, 254, 0.98);
+}
+
+body.theme-dark .shared-task-badge,
+body.theme-dark .shared-task-icon-button {
+    border-color: rgba(56, 189, 248, 0.28);
+    background: rgba(8, 47, 73, 0.82);
+    color: #bae6fd;
+}
+
+body.theme-dark .shared-task-icon-button:hover {
+    border-color: rgba(56, 189, 248, 0.45);
+    background: rgba(12, 74, 110, 0.92);
+}
+
 .kpi-week-grid {
     display: grid;
     grid-template-columns: repeat(7, minmax(0, 1fr));

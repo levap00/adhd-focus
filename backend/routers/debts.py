@@ -1,10 +1,19 @@
 from fastapi import APIRouter, HTTPException, Query
 
+from backend.accounts import get_user_by_username
+from backend.auth import get_request_user
 from backend.db import get_db
 from backend.schemas import DebtCreate, DebtStatePayload, DebtUpdate
 from backend.utils import normalize_month_key, parse_non_negative_float, parse_non_negative_int, utc_now_iso
 
 router = APIRouter()
+
+
+def _current_user_id() -> int:
+    account = get_user_by_username(get_request_user())
+    if not account:
+        raise HTTPException(status_code=401, detail="Brak aktywnego uzytkownika.")
+    return account.id
 
 
 
@@ -26,7 +35,7 @@ def _serialize_debt(row):
     return item
 
 
-def _get_summary(conn):
+def _get_summary(conn, user_id: int):
     summary_row = conn.execute(
         """
         SELECT
@@ -39,7 +48,9 @@ def _get_summary(conn):
             COALESCE(SUM(CASE WHEN kind = 'fixed' THEN 1 ELSE 0 END), 0) AS fixed_count,
             COALESCE(SUM(CASE WHEN kind = 'debt' THEN 1 ELSE 0 END), 0) AS debt_count
         FROM debts
-        """
+        WHERE owner_user_id = ?
+        """,
+        (user_id,),
     ).fetchone()
     return {
         "count": int(summary_row["count"]),
@@ -55,6 +66,7 @@ def _get_summary(conn):
 
 @router.get("/debts")
 def get_debts(month: str = Query(default="")):
+    user_id = _current_user_id()
     month_key = normalize_month_key(month)
     with get_db() as conn:
         items = [
@@ -74,18 +86,20 @@ def get_debts(month: str = Query(default="")):
                     FROM debt_payment_states
                     GROUP BY debt_id
                 ) ps ON ps.debt_id = d.id
+                WHERE d.owner_user_id = ?
                 ORDER BY d.id DESC
                 """,
-                (month_key,),
+                (month_key, user_id),
             ).fetchall()
         ]
-        summary = _get_summary(conn)
+        summary = _get_summary(conn, user_id)
 
     return {"items": items, "summary": summary, "month_key": month_key}
 
 
 @router.post("/debts")
 def add_debt(payload: DebtCreate):
+    user_id = _current_user_id()
     name = (payload.name or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="Nazwa pozycji splaty nie moze byc pusta")
@@ -105,10 +119,10 @@ def add_debt(payload: DebtCreate):
     with get_db() as conn:
         cur = conn.execute(
             """
-            INSERT INTO debts (name, place, kind, total_amount, monthly_amount, due_day, note, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO debts (name, place, kind, total_amount, monthly_amount, due_day, owner_user_id, note, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (name, place, kind, total_amount, monthly_amount, due_day, note, now, now),
+            (name, place, kind, total_amount, monthly_amount, due_day, user_id, note, now, now),
         )
         conn.commit()
 
@@ -128,12 +142,16 @@ def add_debt(payload: DebtCreate):
 
 @router.put("/debts/{debt_id}")
 def update_debt(debt_id: int, payload: DebtUpdate):
+    user_id = _current_user_id()
     update_data = payload.model_dump(exclude_none=True)
     if not update_data:
         return {"status": "no_updates"}
 
     with get_db() as conn:
-        existing = conn.execute("SELECT * FROM debts WHERE id = ?", (debt_id,)).fetchone()
+        existing = conn.execute(
+            "SELECT * FROM debts WHERE id = ? AND owner_user_id = ?",
+            (debt_id, user_id),
+        ).fetchone()
         if not existing:
             raise HTTPException(status_code=404, detail="Pozycja splaty nie znaleziona")
 
@@ -175,8 +193,12 @@ def update_debt(debt_id: int, payload: DebtUpdate):
 
 @router.delete("/debts/{debt_id}")
 def delete_debt(debt_id: int):
+    user_id = _current_user_id()
     with get_db() as conn:
-        existing = conn.execute("SELECT id FROM debts WHERE id = ?", (debt_id,)).fetchone()
+        existing = conn.execute(
+            "SELECT id FROM debts WHERE id = ? AND owner_user_id = ?",
+            (debt_id, user_id),
+        ).fetchone()
         if not existing:
             raise HTTPException(status_code=404, detail="Pozycja splaty nie znaleziona")
 
@@ -188,6 +210,7 @@ def delete_debt(debt_id: int):
 
 @router.put("/debts/{debt_id}/state")
 def update_debt_state(debt_id: int, payload: DebtStatePayload):
+    user_id = _current_user_id()
     if payload.done is None:
         raise HTTPException(status_code=400, detail="Brak statusu splaty do zapisania")
 
@@ -196,7 +219,10 @@ def update_debt_state(debt_id: int, payload: DebtStatePayload):
     now = utc_now_iso()
 
     with get_db() as conn:
-        debt_exists = conn.execute("SELECT id FROM debts WHERE id = ?", (debt_id,)).fetchone()
+        debt_exists = conn.execute(
+            "SELECT id FROM debts WHERE id = ? AND owner_user_id = ?",
+            (debt_id, user_id),
+        ).fetchone()
         if not debt_exists:
             raise HTTPException(status_code=404, detail="Pozycja splaty nie znaleziona")
 

@@ -2,11 +2,20 @@ from datetime import date
 
 from fastapi import APIRouter, HTTPException, Query
 
+from backend.accounts import get_user_by_username
+from backend.auth import get_request_user
 from backend.db import get_db
 from backend.schemas import MedicationCreate, MedicationStatePayload, MedicationUpdate
 from backend.utils import normalize_due_date, normalize_due_time, utc_now_iso
 
 router = APIRouter()
+
+
+def _current_user_id() -> int:
+    account = get_user_by_username(get_request_user())
+    if not account:
+        raise HTTPException(status_code=401, detail="Brak aktywnego uzytkownika.")
+    return account.id
 
 
 def normalize_medication_schedule_type(raw: str | None) -> str:
@@ -54,15 +63,17 @@ def _row_to_item(row, state, date_key: str) -> dict:
 
 @router.get("/medications")
 def get_medications(date_key: str = Query(default="", alias="date")):
+    user_id = _current_user_id()
     clean_date = normalize_medication_date(date_key)
     with get_db() as conn:
         rows = conn.execute(
             """
             SELECT id, name, schedule_type, reminder_time, active, created_at, updated_at
             FROM medication_reminders
-            WHERE active = 1
+            WHERE active = 1 AND owner_user_id = ?
             ORDER BY reminder_time ASC, name COLLATE NOCASE ASC, id ASC
-            """
+            """,
+            (user_id,),
         ).fetchall()
 
         states = {
@@ -94,6 +105,7 @@ def get_medications(date_key: str = Query(default="", alias="date")):
 
 @router.post("/medications")
 def add_medication(payload: MedicationCreate):
+    user_id = _current_user_id()
     name = (payload.name or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="Nazwa leku nie moze byc pusta")
@@ -104,10 +116,10 @@ def add_medication(payload: MedicationCreate):
     with get_db() as conn:
         cur = conn.execute(
             """
-            INSERT INTO medication_reminders (name, schedule_type, reminder_time, active, created_at, updated_at)
-            VALUES (?, ?, ?, 1, ?, ?)
+            INSERT INTO medication_reminders (name, schedule_type, reminder_time, active, owner_user_id, created_at, updated_at)
+            VALUES (?, ?, ?, 1, ?, ?, ?)
             """,
-            (name, schedule_type, reminder_time, now, now),
+            (name, schedule_type, reminder_time, user_id, now, now),
         )
         conn.commit()
 
@@ -124,6 +136,7 @@ def add_medication(payload: MedicationCreate):
 
 @router.put("/medications/{medication_id}")
 def update_medication(medication_id: int, payload: MedicationUpdate):
+    user_id = _current_user_id()
     update_data = payload.model_dump(exclude_none=True)
     if not update_data:
         return {"status": "no_updates"}
@@ -144,7 +157,10 @@ def update_medication(medication_id: int, payload: MedicationUpdate):
     update_data["updated_at"] = utc_now_iso()
 
     with get_db() as conn:
-        exists = conn.execute("SELECT id FROM medication_reminders WHERE id = ?", (medication_id,)).fetchone()
+        exists = conn.execute(
+            "SELECT id FROM medication_reminders WHERE id = ? AND owner_user_id = ?",
+            (medication_id, user_id),
+        ).fetchone()
         if not exists:
             raise HTTPException(status_code=404, detail="Lek nie znaleziony")
         keys = ", ".join([f"{key} = ?" for key in update_data.keys()])
@@ -158,8 +174,12 @@ def update_medication(medication_id: int, payload: MedicationUpdate):
 
 @router.delete("/medications/{medication_id}")
 def delete_medication(medication_id: int):
+    user_id = _current_user_id()
     with get_db() as conn:
-        exists = conn.execute("SELECT id FROM medication_reminders WHERE id = ?", (medication_id,)).fetchone()
+        exists = conn.execute(
+            "SELECT id FROM medication_reminders WHERE id = ? AND owner_user_id = ?",
+            (medication_id, user_id),
+        ).fetchone()
         if not exists:
             raise HTTPException(status_code=404, detail="Lek nie znaleziony")
         conn.execute("DELETE FROM medication_reminders WHERE id = ?", (medication_id,))
@@ -170,13 +190,17 @@ def delete_medication(medication_id: int):
 
 @router.put("/medications/{medication_id}/state")
 def update_medication_state(medication_id: int, payload: MedicationStatePayload):
+    user_id = _current_user_id()
     clean_date = normalize_medication_date(payload.date_key)
     done = 1 if payload.done else 0
     now = utc_now_iso()
     done_at = now if done else ""
 
     with get_db() as conn:
-        exists = conn.execute("SELECT id FROM medication_reminders WHERE id = ?", (medication_id,)).fetchone()
+        exists = conn.execute(
+            "SELECT id FROM medication_reminders WHERE id = ? AND owner_user_id = ?",
+            (medication_id, user_id),
+        ).fetchone()
         if not exists:
             raise HTTPException(status_code=404, detail="Lek nie znaleziony")
 

@@ -6,8 +6,10 @@ from typing import Any
 import requests
 from fastapi import APIRouter, HTTPException, Query
 
+from backend.accounts import AccountConfig, get_user_by_username
+from backend.auth import get_request_user
 from backend.db import get_db
-from backend.schemas import TaskCreate, TaskMergePayload, TaskUpdate
+from backend.schemas import TaskCreate, TaskMergePayload, TaskSharePayload, TaskUpdate
 from backend.telegram import notify_task_closed
 from backend.utils import (
     normalize_due_date,
@@ -23,6 +25,70 @@ router = APIRouter()
 MAX_SUBTASK_TITLE = 180
 WORKDAY_LIMIT_MINUTES = 8 * 60
 DONE_STAMP_RE = re.compile(r"\[Done:\s*(\d{4}-\d{2}-\d{2})\]")
+
+
+def _current_account() -> AccountConfig:
+    account = get_user_by_username(get_request_user())
+    if not account:
+        raise HTTPException(status_code=401, detail="Brak aktywnego uzytkownika.")
+    return account
+
+
+def _resolve_task_access(conn, task_id: int, current_account: AccountConfig | None = None) -> str:
+    account = current_account or _current_account()
+    task = conn.execute(
+        "SELECT id, owner_user_id FROM tasks WHERE id = ?",
+        (task_id,),
+    ).fetchone()
+    if not task:
+        raise HTTPException(status_code=404, detail="Zadanie nie znalezione")
+    if int(task["owner_user_id"] or 0) == account.id:
+        return "owner"
+
+    share = conn.execute(
+        """
+        SELECT 1
+        FROM task_shares
+        WHERE task_id = ? AND shared_user_id = ?
+        """,
+        (task_id, account.id),
+    ).fetchone()
+    if share:
+        return "shared"
+
+    raise HTTPException(status_code=403, detail="Brak dostepu do tego zadania.")
+
+
+def _require_task_access(conn, task_id: int, current_account: AccountConfig | None = None) -> str:
+    try:
+        return _resolve_task_access(conn, task_id, current_account)
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            raise
+        raise HTTPException(status_code=403, detail="Brak dostepu do tego zadania.")
+
+
+def _task_share_count(conn, task_id: int) -> int:
+    row = conn.execute(
+        "SELECT COUNT(*) AS total FROM task_shares WHERE task_id = ?",
+        (task_id,),
+    ).fetchone()
+    return int(row["total"] or 0) if row else 0
+
+
+def _claim_task_reward(conn, task_id: int, user_id: int, points_weight: float) -> None:
+    conn.execute(
+        """
+        INSERT INTO task_reward_claims (task_id, user_id, points_weight, awarded_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(task_id) DO NOTHING
+        """,
+        (task_id, user_id, round(max(0.0, parse_non_negative_float(points_weight, default=0.0)), 2), utc_now_iso()),
+    )
+
+
+def _delete_task_reward_claim(conn, task_id: int) -> None:
+    conn.execute("DELETE FROM task_reward_claims WHERE task_id = ?", (task_id,))
 
 
 def _normalize_optional_int(raw_value: Any) -> int | None:
@@ -146,6 +212,66 @@ def _list_subtasks_by_task_ids(conn, task_ids: list[int]) -> dict[int, list[dict
             }
         )
     return grouped
+
+
+def _row_to_task_payload(
+    row,
+    role: str,
+    share_count: int = 0,
+    subtasks: list[dict] | None = None,
+) -> dict:
+    task = dict(row)
+    task["id"] = int(task["id"])
+    task["owner_user_id"] = int(task.get("owner_user_id") or 0)
+    task["owner_username"] = task.get("owner_username") or ""
+    task["is_shared"] = role == "shared" or share_count > 0
+    task["shared_role"] = role
+    task["share_count"] = share_count
+    task["subtasks"] = subtasks or []
+    return task
+
+
+def _list_accessible_tasks(current_account: AccountConfig) -> list[dict]:
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT t.*,
+                   COALESCE(m.name, '') AS module_name,
+                   COALESCE(u.username, '') AS owner_username,
+                   COALESCE(shared_counts.share_count, 0) AS share_count
+            FROM tasks t
+            LEFT JOIN modules m ON m.id = t.module_id
+            LEFT JOIN users u ON u.id = t.owner_user_id
+            LEFT JOIN (
+                SELECT task_id, COUNT(*) AS share_count
+                FROM task_shares
+                GROUP BY task_id
+            ) shared_counts ON shared_counts.task_id = t.id
+            WHERE t.owner_user_id = ?
+               OR EXISTS (
+                   SELECT 1
+                   FROM task_shares s
+                   WHERE s.task_id = t.id
+                     AND s.shared_user_id = ?
+               )
+            """,
+            (current_account.id, current_account.id),
+        ).fetchall()
+        task_ids = [int(row["id"]) for row in rows]
+        subtasks_by_task = _list_subtasks_by_task_ids(conn, task_ids)
+        tasks = []
+        for row in rows:
+            role = "owner" if int(row["owner_user_id"] or 0) == current_account.id else "shared"
+            task_id = int(row["id"])
+            tasks.append(
+                _row_to_task_payload(
+                    row,
+                    role=role,
+                    share_count=int(row["share_count"] or 0),
+                    subtasks=subtasks_by_task.get(task_id, []),
+                )
+            )
+        return tasks
 
 
 def _replace_task_subtasks(conn, task_id: int, subtasks: list[dict]) -> None:
@@ -298,6 +424,7 @@ def _task_minutes_for_workload_date(
 
 def _get_daily_planned_minutes(
     conn,
+    current_account: AccountConfig,
     due_date: str,
     exclude_task_id: int | None = None,
     exclude_task_ids: list[int] | None = None,
@@ -320,8 +447,22 @@ def _get_daily_planned_minutes(
             (due_date = ? AND status != 'gotowe')
             OR (status = 'gotowe' AND description LIKE ?)
         )
+          AND (
+            owner_user_id = ?
+            OR EXISTS (
+                SELECT 1
+                FROM task_shares s
+                WHERE s.task_id = tasks.id
+                  AND s.shared_user_id = ?
+            )
+          )
     """
-    params: list[Any] = [clean_due_date, f"%[Done: {clean_due_date}]%"]
+    params: list[Any] = [
+        clean_due_date,
+        f"%[Done: {clean_due_date}]%",
+        current_account.id,
+        current_account.id,
+    ]
     if excluded_ids:
         placeholders = ", ".join(["?"] * len(excluded_ids))
         query += f" AND id NOT IN ({placeholders})"
@@ -343,23 +484,67 @@ def _get_daily_planned_minutes(
             counted_task_ids.append(int(row["id"]))
 
     subtask_query = """
-        SELECT task_id, estimated_time
-        FROM task_subtasks
-        WHERE done_at LIKE ?
-          AND estimated_time > 0
+        SELECT st.task_id, st.estimated_time
+        FROM task_subtasks st
+        JOIN tasks t ON t.id = st.task_id
+        WHERE st.done_at LIKE ?
+          AND st.estimated_time > 0
+          AND (
+            t.owner_user_id = ?
+            OR EXISTS (
+                SELECT 1
+                FROM task_shares s
+                WHERE s.task_id = t.id
+                  AND s.shared_user_id = ?
+            )
+          )
     """
-    subtask_params: list[Any] = [f"{clean_due_date}%"]
+    subtask_params: list[Any] = [f"{clean_due_date}%", current_account.id, current_account.id]
     if excluded_ids:
         placeholders = ", ".join(["?"] * len(excluded_ids))
-        subtask_query += f" AND task_id NOT IN ({placeholders})"
+        subtask_query += f" AND st.task_id NOT IN ({placeholders})"
         subtask_params.extend(sorted(excluded_ids))
     if counted_task_ids:
         placeholders = ", ".join(["?"] * len(counted_task_ids))
-        subtask_query += f" AND task_id NOT IN ({placeholders})"
+        subtask_query += f" AND st.task_id NOT IN ({placeholders})"
         subtask_params.extend(counted_task_ids)
 
     subtask_rows = conn.execute(subtask_query, subtask_params).fetchall()
     total += sum(parse_non_negative_int(row["estimated_time"]) for row in subtask_rows)
+    return total
+
+
+def _get_accessible_daily_planned_minutes(
+    current_account: AccountConfig,
+    due_date: str,
+    exclude_task_id: int | None = None,
+) -> int:
+    clean_due_date = normalize_due_date(due_date)
+    if not clean_due_date:
+        return 0
+
+    total = 0
+    for task in _list_accessible_tasks(current_account):
+        task_id = int(task.get("id") or 0)
+        if exclude_task_id is not None and int(exclude_task_id) == task_id:
+            continue
+
+        task_minutes = _task_minutes_for_workload_date(
+            clean_due_date,
+            task.get("due_date") or "",
+            task.get("estimated_time"),
+            task.get("status") or "",
+            task.get("description") or "",
+        )
+        if task_minutes > 0:
+            total += task_minutes
+            continue
+
+        for subtask in task.get("subtasks") or []:
+            done_at = (subtask.get("done_at") or "").strip()
+            if done_at.startswith(clean_due_date):
+                total += parse_non_negative_int(subtask.get("estimated_time"), default=0)
+
     return total
 
 
@@ -619,13 +804,55 @@ def _build_merge_task_name(target_task: dict, source_task: dict, module_names: d
 
 @router.get("/tasks")
 def get_all_tasks():
+    return _list_accessible_tasks(_current_account())
+
+
+@router.post("/tasks/{task_id}/share")
+def share_task(task_id: int, payload: TaskSharePayload):
+    current_account = _current_account()
+    invited_account = get_user_by_username(payload.username)
+    if not invited_account:
+        raise HTTPException(status_code=404, detail="Uzytkownik do udostepnienia nie istnieje.")
+    if invited_account.id == current_account.id:
+        raise HTTPException(status_code=400, detail="Nie mozna udostepnic zadania samemu sobie.")
+    if task_id <= 0:
+        raise HTTPException(status_code=403, detail="Tylko wlasciciel moze dalej udostepniac zadanie.")
+
     with get_db() as conn:
-        tasks = [dict(row) for row in conn.execute("SELECT * FROM tasks").fetchall()]
-        task_ids = [int(task["id"]) for task in tasks]
-        subtasks_by_task = _list_subtasks_by_task_ids(conn, task_ids)
-        for task in tasks:
-            task["subtasks"] = subtasks_by_task.get(int(task["id"]), [])
-        return tasks
+        task = conn.execute(
+            "SELECT id, owner_user_id FROM tasks WHERE id = ?",
+            (task_id,),
+        ).fetchone()
+        if not task:
+            raise HTTPException(status_code=404, detail="Zadanie nie znalezione")
+        if int(task["owner_user_id"] or 0) != current_account.id:
+            raise HTTPException(status_code=403, detail="Tylko wlasciciel moze udostepnic zadanie.")
+
+        existing = conn.execute(
+            """
+            SELECT id
+            FROM task_shares
+            WHERE task_id = ? AND shared_user_id = ?
+            """,
+            (task_id, invited_account.id),
+        ).fetchone()
+        if existing:
+            raise HTTPException(status_code=409, detail="Zadanie jest juz udostepnione temu uzytkownikowi.")
+
+        conn.execute(
+            """
+            INSERT INTO task_shares (task_id, shared_user_id, shared_at)
+            VALUES (?, ?, ?)
+            """,
+            (task_id, invited_account.id, utc_now_iso()),
+        )
+        conn.commit()
+
+    return {
+        "status": "shared",
+        "task_id": task_id,
+        "shared_with": invited_account.username,
+    }
 
 
 @router.get("/tasks/workload")
@@ -639,8 +866,11 @@ def get_day_workload(
     if not clean_date:
         raise HTTPException(status_code=400, detail="Niepoprawna data (format YYYY-MM-DD).")
 
-    with get_db() as conn:
-        planned_minutes = _get_daily_planned_minutes(conn, clean_date, exclude_task_id=exclude_task_id)
+    planned_minutes = _get_accessible_daily_planned_minutes(
+        _current_account(),
+        clean_date,
+        exclude_task_id=exclude_task_id,
+    )
 
     return {
         "date": clean_date,
@@ -663,17 +893,7 @@ def get_today_widget_tasks(
     if raw_date and not clean_date:
         raise HTTPException(status_code=400, detail="Niepoprawna data (format YYYY-MM-DD).")
 
-    with get_db() as conn:
-        rows = conn.execute(
-            """
-            SELECT t.*, COALESCE(m.name, '') AS module_name
-            FROM tasks t
-            LEFT JOIN modules m ON m.id = t.module_id
-            """
-        ).fetchall()
-        tasks = [dict(row) for row in rows]
-        task_ids = [int(task["id"]) for task in tasks]
-        subtasks_by_task = _list_subtasks_by_task_ids(conn, task_ids)
+    tasks = _list_accessible_tasks(_current_account())
 
     widget_tasks: list[dict] = []
     today_open_count = 0
@@ -707,7 +927,7 @@ def get_today_widget_tasks(
             else:
                 continue
 
-        subtasks = subtasks_by_task.get(task_id, [])
+        subtasks = task.get("subtasks") or []
         subtasks_total = len(subtasks)
         subtasks_done = sum(1 for item in subtasks if bool(item.get("done")))
 
@@ -728,6 +948,8 @@ def get_today_widget_tasks(
                 "subtasks_total": subtasks_total,
                 "subtasks_done": subtasks_done,
                 "subtasks_open": max(0, subtasks_total - subtasks_done),
+                "is_shared": bool(task.get("is_shared")),
+                "owner_username": task.get("owner_username") or "",
             }
         )
 
@@ -752,6 +974,7 @@ def get_today_widget_tasks(
 
 @router.post("/tasks/merge")
 def merge_tasks(payload: TaskMergePayload):
+    current_account = _current_account()
     source_task_id = parse_non_negative_int(payload.source_task_id)
     target_task_id = parse_non_negative_int(payload.target_task_id)
     if source_task_id <= 0 or target_task_id <= 0:
@@ -772,6 +995,10 @@ def merge_tasks(payload: TaskMergePayload):
         target_task = tasks_by_id.get(target_task_id)
         if not source_task or not target_task:
             raise HTTPException(status_code=404, detail="Nie znaleziono jednego z zadan do polaczenia.")
+        if int(source_task.get("owner_user_id") or 0) != current_account.id:
+            raise HTTPException(status_code=403, detail="Tylko wlasciciel moze scalac zadanie z innym.")
+        if int(target_task.get("owner_user_id") or 0) != current_account.id:
+            raise HTTPException(status_code=403, detail="Tylko wlasciciel moze scalac zadanie z innym.")
 
         module_rows = conn.execute("SELECT id, name FROM modules").fetchall()
         module_names = {int(row["id"]): row["name"] or "" for row in module_rows}
@@ -829,7 +1056,12 @@ def merge_tasks(payload: TaskMergePayload):
         next_module_id = int(target_task["module_id"])
 
         limit_date = _task_limit_date(next_due_date, next_status, next_description)
-        planned_before = _get_daily_planned_minutes(conn, limit_date, exclude_task_ids=excluded_task_ids)
+        planned_before = _get_daily_planned_minutes(
+            conn,
+            current_account,
+            limit_date,
+            exclude_task_ids=excluded_task_ids,
+        )
         task_minutes = _task_minutes_for_workload_date(
             limit_date,
             next_due_date,
@@ -842,8 +1074,19 @@ def merge_tasks(payload: TaskMergePayload):
         if parent_task_id is None:
             cur = conn.execute(
                 """
-                INSERT INTO tasks (name, module_id, estimated_time, points_weight, status, priority, description, due_date, due_time)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO tasks (
+                    name,
+                    module_id,
+                    estimated_time,
+                    points_weight,
+                    status,
+                    priority,
+                    description,
+                    due_date,
+                    due_time,
+                    owner_user_id
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     next_name,
@@ -855,6 +1098,7 @@ def merge_tasks(payload: TaskMergePayload):
                     next_description,
                     next_due_date,
                     next_due_time,
+                    current_account.id,
                 ),
             )
             parent_task_id = int(cur.lastrowid)
@@ -903,6 +1147,7 @@ def merge_tasks(payload: TaskMergePayload):
 
 @router.post("/tasks")
 def add_task(payload: TaskCreate):
+    current_account = _current_account()
     clean_name = (payload.name or "").strip()
     if not clean_name:
         raise HTTPException(status_code=400, detail="Nazwa zadania nie moze byc pusta")
@@ -925,14 +1170,14 @@ def add_task(payload: TaskCreate):
 
     with get_db() as conn:
         module_exists = conn.execute(
-            "SELECT 1 FROM modules WHERE id = ?",
-            (payload.module_id,),
+            "SELECT 1 FROM modules WHERE id = ? AND owner_user_id = ?",
+            (payload.module_id, current_account.id),
         ).fetchone()
         if not module_exists:
             raise HTTPException(status_code=404, detail="Modul nie znaleziony")
 
         limit_date = _task_limit_date(clean_due_date, clean_status, clean_description)
-        planned_before = _get_daily_planned_minutes(conn, limit_date)
+        planned_before = _get_daily_planned_minutes(conn, current_account, limit_date)
         task_minutes = _task_minutes_for_workload_date(
             limit_date,
             clean_due_date,
@@ -944,8 +1189,19 @@ def add_task(payload: TaskCreate):
 
         cur = conn.execute(
             """
-            INSERT INTO tasks (name, module_id, estimated_time, points_weight, status, priority, description, due_date, due_time)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO tasks (
+                name,
+                module_id,
+                estimated_time,
+                points_weight,
+                status,
+                priority,
+                description,
+                due_date,
+                due_time,
+                owner_user_id
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 clean_name,
@@ -957,6 +1213,7 @@ def add_task(payload: TaskCreate):
                 clean_description,
                 clean_due_date,
                 clean_due_time,
+                current_account.id,
             ),
         )
         task_id = int(cur.lastrowid)
@@ -967,9 +1224,11 @@ def add_task(payload: TaskCreate):
     return {"id": task_id}
 
 
+@router.patch("/tasks/{task_id}")
 @router.put("/tasks/{task_id}")
 def update_task(task_id: int, task_data: TaskUpdate):
-    raw_update_data = task_data.model_dump(exclude_none=True)
+    current_account = _current_account()
+    raw_update_data = task_data.model_dump(exclude_unset=True)
     allow_time_overflow = bool(raw_update_data.pop("allow_time_overflow", False))
     subtasks_data = _normalize_subtasks(raw_update_data.get("subtasks")) if "subtasks" in raw_update_data else None
     allowed_fields = {
@@ -1008,6 +1267,7 @@ def update_task(task_id: int, task_data: TaskUpdate):
         update_data["points_weight"] = _normalize_points_weight(update_data["points_weight"])
 
     with get_db() as conn:
+        _require_task_access(conn, task_id, current_account)
         existing_task = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
         if not existing_task:
             raise HTTPException(status_code=404, detail="Zadanie nie znalezione")
@@ -1016,8 +1276,8 @@ def update_task(task_id: int, task_data: TaskUpdate):
 
         if "module_id" in update_data:
             module_exists = conn.execute(
-                "SELECT 1 FROM modules WHERE id = ?",
-                (update_data["module_id"],),
+                "SELECT 1 FROM modules WHERE id = ? AND owner_user_id = ?",
+                (update_data["module_id"], current_account.id),
             ).fetchone()
             if not module_exists:
                 raise HTTPException(status_code=404, detail="Modul nie znaleziony")
@@ -1045,7 +1305,7 @@ def update_task(task_id: int, task_data: TaskUpdate):
         next_status_for_limit = update_data.get("status", existing_task.get("status", ""))
         next_description_for_limit = update_data.get("description", existing_task.get("description", ""))
         limit_date = _task_limit_date(next_due_date_for_limit, next_status_for_limit, next_description_for_limit)
-        planned_before = _get_daily_planned_minutes(conn, limit_date, exclude_task_id=task_id)
+        planned_before = _get_daily_planned_minutes(conn, current_account, limit_date, exclude_task_id=task_id)
         task_minutes = _task_minutes_for_workload_date(
             limit_date,
             next_due_date_for_limit,
@@ -1068,6 +1328,16 @@ def update_task(task_id: int, task_data: TaskUpdate):
         if subtasks_data is not None:
             _replace_task_subtasks(conn, task_id, subtasks_data)
 
+        if was_open and not will_be_open:
+            _claim_task_reward(
+                conn,
+                task_id,
+                current_account.id,
+                update_data.get("points_weight", existing_task.get("points_weight", 0)),
+            )
+        elif not was_open and will_be_open:
+            _delete_task_reward_claim(conn, task_id)
+
         conn.commit()
 
     if was_open and not will_be_open:
@@ -1078,11 +1348,21 @@ def update_task(task_id: int, task_data: TaskUpdate):
 
 @router.delete("/tasks/{task_id}")
 def delete_task(task_id: int):
-    task_name = ""
-    was_open = False
+    current_account = _current_account()
 
     with get_db() as conn:
+        role = _require_task_access(conn, task_id, current_account)
+        if role == "shared":
+            conn.execute(
+                "DELETE FROM task_shares WHERE task_id = ? AND shared_user_id = ?",
+                (task_id, current_account.id),
+            )
+            conn.commit()
+            return {"status": "left_shared_task"}
+
         task = conn.execute("SELECT name, status FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        task_name = ""
+        was_open = False
         if task:
             task_name = task["name"] or "(bez nazwy)"
             was_open = normalize_status(task["status"]) != "gotowe"
@@ -1098,10 +1378,13 @@ def delete_task(task_id: int):
 
 @router.post("/tasks/{task_id}/shred")
 def shred_task(task_id: int):
+    current_account = _current_account()
     with get_db() as conn:
         task = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
         if not task:
             raise HTTPException(status_code=404, detail="Zadanie nie znalezione")
+        if int(task["owner_user_id"] or 0) != current_account.id:
+            raise HTTPException(status_code=403, detail="Tylko wlasciciel moze rozbijac zadanie.")
     was_open_before_shred = normalize_status(task["status"]) != "gotowe"
 
     prompt = (
@@ -1136,10 +1419,10 @@ def shred_task(task_id: int):
                     continue
                 conn.execute(
                     """
-                    INSERT INTO tasks (name, module_id, status, estimated_time, priority, due_date, due_time)
-                    VALUES (?, ?, 'oczekujace', 15, ?, '', '')
+                    INSERT INTO tasks (name, module_id, status, estimated_time, priority, due_date, due_time, owner_user_id)
+                    VALUES (?, ?, 'oczekujace', 15, ?, '', '', ?)
                     """,
-                    (task_name, task["module_id"], task["priority"] or ""),
+                    (task_name, task["module_id"], task["priority"] or "", current_account.id),
                 )
             conn.commit()
 

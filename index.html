@@ -263,7 +263,10 @@
                                                 <span :class="getModuleTheme(task.module_id).badge" class="rounded-full border px-2.5 py-1 text-[11px] font-bold" x-text="getModuleName(task.module_id)"></span>
                                                 <span x-show="getTaskUrgencyLabel(task)" x-cloak :class="getUrgencyClass(task)" class="rounded-full px-2.5 py-1 text-[11px] font-bold" x-text="getTaskUrgencyLabel(task)"></span>
                                             </div>
-                                            <div class="mt-3 text-sm font-bold leading-6 text-slate-900" x-text="task.name"></div>
+                                            <div class="mt-3 flex flex-wrap items-center gap-2 text-sm font-bold leading-6 text-slate-900">
+                                                <span x-text="task.name"></span>
+                                                <span x-show="isTaskShared(task)" x-cloak class="shared-task-badge shared-task-badge-compact" x-text="getTaskSharedLabel(task)"></span>
+                                            </div>
                                             <div x-show="getTaskDescriptionPreview(task)" x-cloak class="mt-1 text-[11px] leading-4 text-slate-600" x-text="getTaskDescriptionPreview(task)"></div>
                                             <div class="mt-4 flex gap-2">
                                                 <button @click="openTaskModal(task)" class="rounded-xl bg-white px-3 py-2 text-xs font-bold text-slate-600 transition-colors hover:bg-slate-100">Szczegoly</button>
@@ -347,7 +350,10 @@
                                             <template x-for="task in getModulePreviewTasks(module.id, 3)" :key="task.id">
                                                 <button @click="openTaskModal(task)" :class="`priority-${task.priority}`" class="flex w-full items-start justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-3 py-3 text-left transition-colors hover:bg-slate-50">
                                                     <div class="min-w-0">
-                                                        <div class="truncate text-sm font-bold text-slate-800" x-text="task.name"></div>
+                                                        <div class="flex min-w-0 flex-wrap items-center gap-1.5">
+                                                            <span class="truncate text-sm font-bold text-slate-800" x-text="task.name"></span>
+                                                            <span x-show="isTaskShared(task)" x-cloak class="shared-task-badge shared-task-badge-compact" x-text="getTaskSharedLabel(task)"></span>
+                                                        </div>
                                                         <div x-show="getTaskDescriptionPreview(task)" x-cloak class="mt-1 text-[11px] leading-4 text-slate-600" x-text="getTaskDescriptionPreview(task)"></div>
                                                         <div class="mt-1 text-[11px] text-slate-500">
                                                             <span x-text="getStatusLabel(task.status)"></span>
@@ -467,11 +473,18 @@
                                                                     <span x-show="hasPriority(task)" :class="getPriorityDotClass(task.priority)" class="h-2 w-2 rounded-full"></span>
                                                                     <span x-show="getTaskUrgencyLabel(task)" x-cloak :class="getUrgencyClass(task)" class="rounded-full px-2 py-1 text-[10px] font-bold" x-text="getTaskUrgencyLabel(task)"></span>
                                                                     <span x-show="getTaskBundleLabel(task)" x-cloak class="rounded-full bg-cyan-50 px-2 py-1 text-[10px] font-bold text-cyan-700" x-text="getTaskBundleLabel(task)"></span>
+                                                                    <span x-show="isTaskShared(task)" x-cloak class="shared-task-badge shared-task-badge-compact" x-text="getTaskSharedLabel(task)"></span>
                                                                     <span x-show="draggedTaskTargetId === task.id" x-cloak class="task-merge-chip">Polacz</span>
                                                                 </div>
-                                                                <span x-show="col.id !== 'gotowe'" class="text-[10px] font-mono font-bold text-slate-400" x-text="task.estimated_time > 0 ? task.estimated_time + ' min' : ''"></span>
+                                                                <div class="flex shrink-0 items-center gap-1">
+                                                                    <button x-show="canShareTask(task)" x-cloak @click.stop="shareTaskPrompt(task.id)" class="shared-task-icon-button" title="Udostepnij zadanie" type="button">👥</button>
+                                                                    <span x-show="col.id !== 'gotowe'" class="text-[10px] font-mono font-bold text-slate-400" x-text="task.estimated_time > 0 ? task.estimated_time + ' min' : ''"></span>
+                                                                </div>
                                                             </div>
-                                                            <div class="mt-2 text-sm font-bold leading-6 text-slate-900" :class="task.status === 'gotowe' ? 'line-through text-slate-400' : ''" x-text="task.name"></div>
+                                                            <div class="mt-2 flex flex-wrap items-center gap-1.5 text-sm font-bold leading-6 text-slate-900" :class="task.status === 'gotowe' ? 'line-through text-slate-400' : ''">
+                                                                <span x-text="task.name"></span>
+                                                                <span x-show="isTaskShared(task)" x-cloak class="shared-task-badge shared-task-badge-compact" x-text="getTaskSharedLabel(task)"></span>
+                                                            </div>
                                                             <div x-show="col.id !== 'gotowe' && getTaskDescriptionPreview(task, taskScope === 'module' ? 14 : 8)" x-cloak class="mt-1 text-[11px] leading-4 text-slate-600" x-text="getTaskDescriptionPreview(task, taskScope === 'module' ? 14 : 8)"></div>
                                                         </div>
                                                     </template>
@@ -598,11 +611,18 @@
                                                                     <span x-show="hasPriority(task)" :class="getPriorityDotClass(task.priority)" class="h-2 w-2 rounded-full"></span>
                                                                     <span x-show="getTaskUrgencyLabel(task)" x-cloak :class="getUrgencyClass(task)" class="rounded-full px-2 py-0.5 text-[10px] font-bold" x-text="getTaskUrgencyLabel(task)"></span>
                                                                     <span x-show="getTaskBundleLabel(task)" x-cloak class="rounded-full bg-cyan-50 px-2 py-0.5 text-[10px] font-bold text-cyan-700" x-text="getTaskBundleLabel(task)"></span>
+                                                                    <span x-show="isTaskShared(task)" x-cloak class="shared-task-badge shared-task-badge-compact" x-text="getTaskSharedLabel(task)"></span>
                                                                     <span x-show="draggedTaskTargetId === task.id" x-cloak class="task-merge-chip">Polacz</span>
                                                                 </div>
-                                                                <span x-show="col.id !== 'gotowe'" class="text-[10px] font-mono font-bold text-slate-400" x-text="task.estimated_time > 0 ? task.estimated_time + ' min' : ''"></span>
+                                                                <div class="flex shrink-0 items-center gap-1">
+                                                                    <button x-show="canShareTask(task)" x-cloak @click.stop="shareTaskPrompt(task.id)" class="shared-task-icon-button" title="Udostepnij zadanie" type="button">👥</button>
+                                                                    <span x-show="col.id !== 'gotowe'" class="text-[10px] font-mono font-bold text-slate-400" x-text="task.estimated_time > 0 ? task.estimated_time + ' min' : ''"></span>
+                                                                </div>
                                                             </div>
-                                                            <div class="text-xs font-bold leading-5 text-slate-900" :class="task.status === 'gotowe' ? 'line-through text-slate-400' : ''" x-text="task.name"></div>
+                                                            <div class="flex flex-wrap items-center gap-1.5 text-xs font-bold leading-5 text-slate-900" :class="task.status === 'gotowe' ? 'line-through text-slate-400' : ''">
+                                                                <span x-text="task.name"></span>
+                                                                <span x-show="isTaskShared(task)" x-cloak class="shared-task-badge shared-task-badge-compact" x-text="getTaskSharedLabel(task)"></span>
+                                                            </div>
                                                             <div x-show="col.id !== 'gotowe' && getTaskDescriptionPreview(task)" x-cloak class="mt-1 text-[11px] leading-4 text-slate-600" x-text="getTaskDescriptionPreview(task)"></div>
                                                         </div>
                                                     </template>
@@ -737,7 +757,10 @@
                                                                     type="button"
                                                                 >
                                                                     <div class="calendar-timeline-task-time" x-text="getCalendarTimelineTimeRangeLabel(entry)"></div>
-                                                                    <div class="calendar-timeline-task-title" x-text="entry.item.name"></div>
+                                                                    <div class="calendar-timeline-task-title">
+                                                                        <span x-text="entry.item.name"></span>
+                                                                        <span x-show="isTaskShared(entry.item)" x-cloak class="shared-task-badge shared-task-badge-calendar" x-text="getTaskSharedLabel(entry.item)"></span>
+                                                                    </div>
                                                                     <div class="calendar-timeline-task-meta">
                                                                         <span class="calendar-timeline-task-module" x-text="getModuleName(entry.item.module_id)"></span>
                                                                         <span x-show="getCalendarCarryOverLabel(entry)" x-cloak class="calendar-timeline-task-carry" x-text="getCalendarCarryOverLabel(entry)"></span>
@@ -824,7 +847,10 @@
                                                         >
                                                             <span class="calendar-entry-time" x-text="getCalendarEntryTime(entry)"></span>
                                                             <span :class="getModuleTheme(entry.item.module_id).dot" class="h-1.5 w-1.5 shrink-0 rounded-full"></span>
-                                                            <span class="calendar-entry-title" x-text="entry.item.name"></span>
+                                                            <span class="calendar-entry-title">
+                                                                <span x-text="entry.item.name"></span>
+                                                                <span x-show="isTaskShared(entry.item)" x-cloak class="shared-task-badge shared-task-badge-calendar" x-text="getTaskSharedLabel(entry.item)"></span>
+                                                            </span>
                                                             <span :class="getCalendarTaskUrgencyClass(entry)" class="calendar-entry-urgency calendar-entry-urgency-compact" x-text="getCalendarTaskUrgencyLabel(entry)"></span>
                                                             <span :class="getCalendarTaskStatusClass(entry)" class="calendar-entry-status calendar-entry-status-compact" x-text="getCalendarTaskStatusLabel(entry)"></span>
                                                         </button>
@@ -1393,6 +1419,10 @@
                 <div class="mb-4 border-b border-slate-200/80 pb-4">
                     <p class="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400" x-text="isCreatingTask ? 'Nowe zadanie' : 'Edycja zadania'"></p>
                     <input x-model="editingTask.name" class="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-xl font-black text-slate-900 outline-none transition-colors focus:border-emerald-400 md:text-[2rem]" placeholder="Nazwa zadania">
+                    <div x-show="isTaskShared(editingTask)" x-cloak class="mt-2 flex flex-wrap items-center gap-2">
+                        <span class="shared-task-badge" x-text="getTaskSharedLabel(editingTask)"></span>
+                        <span x-show="editingTask.shared_role === 'shared'" x-cloak class="text-xs font-bold text-slate-400">To jest wspolne zadanie — zmiany widza wszyscy uczestnicy.</span>
+                    </div>
                 </div>
 
                 <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
@@ -1512,6 +1542,7 @@
                 <div class="sticky bottom-0 mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-slate-200/80 bg-slate-50/90 px-1 pb-1 pt-4 backdrop-blur-sm">
                     <button x-show="editingTask.id" x-cloak @click="removeEditingTask()" class="rounded-2xl px-4 py-2 text-xs font-bold text-red-500 transition-colors hover:bg-red-50 hover:text-red-700">Usun zadanie</button>
                     <div class="ml-auto flex gap-3">
+                        <button x-show="canShareTask(editingTask)" x-cloak @click="shareTaskPrompt(editingTask.id)" class="rounded-2xl border border-cyan-200 bg-cyan-50 px-4 py-2 text-xs font-bold text-cyan-700 transition-colors hover:bg-cyan-100">👥 Udostepnij</button>
                         <button @click="taskModal = false; isCreatingTask = false" class="rounded-2xl px-4 py-2 text-xs font-bold text-slate-500">Anuluj</button>
                         <button @click="saveTask()" class="rounded-2xl bg-emerald-600 px-8 py-3 text-xs font-bold text-white shadow-[0_12px_24px_rgba(5,150,105,0.22)] transition-colors hover:bg-emerald-700">Zapisz</button>
                     </div>

@@ -4,12 +4,21 @@ from datetime import date, timedelta
 
 from fastapi import APIRouter, HTTPException, Query
 
+from backend.accounts import get_user_by_username
+from backend.auth import get_request_user
 from backend.db import get_db
 from backend.schemas import MonthlyTaskCreate, MonthlyTaskStatePayload, MonthlyTaskUpdate
 from backend.utils import normalize_month_key, parse_non_negative_int, utc_now_iso
 
 router = APIRouter()
 WEEK_KEY_PATTERN = re.compile(r"^week:(\d{4}-\d{2}-\d{2})$")
+
+
+def _current_user_id() -> int:
+    account = get_user_by_username(get_request_user())
+    if not account:
+        raise HTTPException(status_code=401, detail="Brak aktywnego uzytkownika.")
+    return account.id
 
 
 def normalize_repeat_type(raw: str) -> str:
@@ -69,6 +78,7 @@ def get_occurrence_date_keys(month_key: str, repeat_type: str, due_day: int, rep
 
 @router.get("/monthly-tasks")
 def get_monthly_tasks(month: str = Query(default="")):
+    user_id = _current_user_id()
     month_key = normalize_month_key(month)
     with get_db() as conn:
         base_rows = conn.execute(
@@ -82,8 +92,10 @@ def get_monthly_tasks(month: str = Query(default="")):
                 mt.created_at,
                 mt.updated_at
             FROM monthly_tasks mt
+            WHERE mt.owner_user_id = ?
             ORDER BY mt.id DESC
             """,
+            (user_id,),
         ).fetchall()
 
         task_ids = [int(row["id"]) for row in base_rows]
@@ -169,6 +181,7 @@ def get_monthly_tasks(month: str = Query(default="")):
 
 @router.post("/monthly-tasks")
 def add_monthly_task(payload: MonthlyTaskCreate):
+    user_id = _current_user_id()
     name = (payload.name or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="Nazwa zadania miesiecznego nie moze byc pusta")
@@ -180,10 +193,10 @@ def add_monthly_task(payload: MonthlyTaskCreate):
     with get_db() as conn:
         cur = conn.execute(
             """
-            INSERT INTO monthly_tasks (name, due_day, repeat_type, repeat_weekday, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO monthly_tasks (name, due_day, repeat_type, repeat_weekday, owner_user_id, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (name, due_day, repeat_type, repeat_weekday, now, now),
+            (name, due_day, repeat_type, repeat_weekday, user_id, now, now),
         )
         conn.commit()
 
@@ -200,6 +213,7 @@ def add_monthly_task(payload: MonthlyTaskCreate):
 
 @router.put("/monthly-tasks/{task_id}")
 def update_monthly_task(task_id: int, payload: MonthlyTaskUpdate):
+    user_id = _current_user_id()
     name = (payload.name or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="Nazwa zadania miesiecznego nie moze byc pusta")
@@ -209,7 +223,10 @@ def update_monthly_task(task_id: int, payload: MonthlyTaskUpdate):
 
     now = utc_now_iso()
     with get_db() as conn:
-        exists = conn.execute("SELECT id FROM monthly_tasks WHERE id = ?", (task_id,)).fetchone()
+        exists = conn.execute(
+            "SELECT id FROM monthly_tasks WHERE id = ? AND owner_user_id = ?",
+            (task_id, user_id),
+        ).fetchone()
         if not exists:
             raise HTTPException(status_code=404, detail="Zadanie miesieczne nie znalezione")
 
@@ -236,8 +253,12 @@ def update_monthly_task(task_id: int, payload: MonthlyTaskUpdate):
 
 @router.delete("/monthly-tasks/{task_id}")
 def delete_monthly_task(task_id: int):
+    user_id = _current_user_id()
     with get_db() as conn:
-        exists = conn.execute("SELECT id FROM monthly_tasks WHERE id = ?", (task_id,)).fetchone()
+        exists = conn.execute(
+            "SELECT id FROM monthly_tasks WHERE id = ? AND owner_user_id = ?",
+            (task_id, user_id),
+        ).fetchone()
         if not exists:
             raise HTTPException(status_code=404, detail="Zadanie miesieczne nie znalezione")
 
@@ -249,10 +270,11 @@ def delete_monthly_task(task_id: int):
 
 @router.put("/monthly-tasks/{task_id}/state")
 def update_monthly_task_state(task_id: int, payload: MonthlyTaskStatePayload):
+    user_id = _current_user_id()
     with get_db() as conn:
         task_exists = conn.execute(
-            "SELECT id, repeat_type FROM monthly_tasks WHERE id = ?",
-            (task_id,),
+            "SELECT id, repeat_type FROM monthly_tasks WHERE id = ? AND owner_user_id = ?",
+            (task_id, user_id),
         ).fetchone()
         if not task_exists:
             raise HTTPException(status_code=404, detail="Zadanie miesieczne nie znalezione")

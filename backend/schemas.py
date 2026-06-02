@@ -65,6 +65,10 @@ class TaskUpdate(BaseModel):
     subtasks: Optional[list[TaskSubtaskPayload]] = None
 
 
+class TaskSharePayload(BaseModel):
+    username: str = Field(..., min_length=3, max_length=64)
+
+
 class TaskMergePayload(BaseModel):
     source_task_id: int
     target_task_id: int

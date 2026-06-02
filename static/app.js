@@ -559,6 +559,10 @@
                         estimated_time: this.normalizeEstimatedMinutes(task.estimated_time),
                         points_weight: this.normalizePointsWeight(task.points_weight),
                         due_time: this.sanitizeDueTime(task.due_time, task.due_date ? '14:00' : ''),
+                        is_shared: !!task.is_shared,
+                        shared_role: (task.shared_role || 'owner').toString(),
+                        share_count: Number(task.share_count || 0),
+                        owner_username: (task.owner_username || '').toString(),
                         subtasks: this.normalizeSubtasks(task.subtasks)
                     }));
                 },
@@ -2572,6 +2576,28 @@
                     return this.tasks.find(task => task.id === taskId) || null;
                 },
 
+                isTaskOwner(task) {
+                    if (!task) return false;
+                    return !task.shared_role || task.shared_role === 'owner';
+                },
+
+                isTaskShared(task) {
+                    if (!task) return false;
+                    return !!task.is_shared || task.shared_role === 'shared' || Number(task.share_count || 0) > 0;
+                },
+
+                canShareTask(task) {
+                    return !!(task && Number(task.id) > 0 && this.isTaskOwner(task));
+                },
+
+                getTaskSharedLabel(task) {
+                    if (!this.isTaskShared(task)) return '';
+                    if (task?.shared_role === 'shared' && task?.owner_username) {
+                        return `👥 Wspólne · ${task.owner_username}`;
+                    }
+                    return '👥 Wspólne';
+                },
+
                 buildDoneDescription(description = '') {
                     const stamp = `[Done: ${this.getTodayKey()}]`;
                     if ((description || '').includes(stamp)) return description || stamp;
@@ -2674,6 +2700,43 @@
                     await fetch(`${this.API}/tasks/${taskId}`, { method: 'DELETE' });
                     await this.init();
                     return true;
+                },
+
+                async shareTaskPrompt(taskId) {
+                    const id = Number(taskId);
+                    const task = this.getTaskById(id) || (Number(this.editingTask?.id) === id ? this.editingTask : null);
+                    if (!id || !this.canShareTask(task)) {
+                        alert('Tylko wlasciciel moze udostepnic to zadanie.');
+                        return false;
+                    }
+
+                    const username = prompt('Podaj nazwe uzytkownika, z ktorym chcesz dzielic to zadanie:');
+                    if (username === null) return false;
+                    const cleanUsername = username.trim();
+                    if (!cleanUsername) return false;
+
+                    try {
+                        const response = await fetch(`${this.API}/tasks/${id}/share`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ username: cleanUsername })
+                        });
+
+                        if (!response.ok) {
+                            alert(await this.getApiErrorMessage(response, 'Nie udalo sie udostepnic zadania.'));
+                            return false;
+                        }
+
+                        await this.init();
+                        const refreshedTask = this.getTaskById(id);
+                        if (this.taskModal && Number(this.editingTask?.id) === id && refreshedTask) {
+                            this.openTaskModal(refreshedTask);
+                        }
+                        return true;
+                    } catch (error) {
+                        alert('Nie udalo sie udostepnic zadania. Sprawdz polaczenie z backendem.');
+                        return false;
+                    }
                 },
 
                 async deleteModule(module) {
@@ -3907,9 +3970,6 @@
                 },
 
                 async getApiErrorMessage(response, fallback) {
-                    if (response.status === 404) {
-                        return 'Endpoint nie znaleziony. Otworz aplikacje przez backend (http://127.0.0.1:8000) i odswiez strone, zeby formularze trafialy do API.';
-                    }
                     try {
                         const payload = await response.json();
                         if (payload?.detail && payload.detail !== 'Not Found') {
@@ -3918,6 +3978,9 @@
                         }
                     } catch (error) {
                         /* response was not JSON */
+                    }
+                    if (response.status === 404) {
+                        return 'Endpoint nie znaleziony. Otworz aplikacje przez backend (http://127.0.0.1:8000) i odswiez strone, zeby formularze trafialy do API.';
                     }
                     return fallback;
                 },

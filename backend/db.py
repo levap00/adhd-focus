@@ -1,8 +1,7 @@
 import sqlite3
 from pathlib import Path
 
-from backend.accounts import get_db_path_for_username, list_unique_db_paths
-from backend.auth import get_request_user
+from backend.accounts import DATABASE_PATH
 
 
 def _connect_db(db_path: Path) -> sqlite3.Connection:
@@ -13,12 +12,8 @@ def _connect_db(db_path: Path) -> sqlite3.Connection:
     return conn
 
 
-def _current_db_path() -> Path:
-    return get_db_path_for_username(get_request_user())
-
-
 def get_db() -> sqlite3.Connection:
-    return _connect_db(_current_db_path())
+    return _connect_db(DATABASE_PATH)
 
 
 
@@ -29,14 +24,40 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) 
 
 
 
-def _init_db_for_path(db_path: Path) -> None:
-    with _connect_db(db_path) as conn:
+def _init_db() -> None:
+    with _connect_db(DATABASE_PATH) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL UNIQUE,
+                hashed_password TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS invite_codes (
+                code TEXT PRIMARY KEY,
+                used_by_user_id INTEGER,
+                created_at TEXT NOT NULL DEFAULT '',
+                used_at TEXT NOT NULL DEFAULT '',
+                FOREIGN KEY (used_by_user_id) REFERENCES users(id)
+            )
+            """
+        )
+
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS modules (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT,
-                category TEXT DEFAULT 'praca'
+                category TEXT DEFAULT 'praca',
+                owner_user_id INTEGER,
+                FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE
             )
             """
         )
@@ -54,7 +75,9 @@ def _init_db_for_path(db_path: Path) -> None:
                 due_time TEXT DEFAULT '',
                 estimated_time INTEGER DEFAULT 0,
                 points_weight REAL DEFAULT 1,
-                FOREIGN KEY (module_id) REFERENCES modules(id) ON DELETE CASCADE
+                owner_user_id INTEGER NOT NULL,
+                FOREIGN KEY (module_id) REFERENCES modules(id) ON DELETE CASCADE,
+                FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE
             )
             """
         )
@@ -84,10 +107,42 @@ def _init_db_for_path(db_path: Path) -> None:
 
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS task_shares (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id INTEGER NOT NULL,
+                shared_user_id INTEGER NOT NULL,
+                shared_at TEXT NOT NULL DEFAULT '',
+                UNIQUE(task_id, shared_user_id),
+                FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+                FOREIGN KEY (shared_user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_task_shares_user ON task_shares(shared_user_id, task_id)")
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS task_reward_claims (
+                task_id INTEGER PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                points_weight REAL NOT NULL DEFAULT 0,
+                awarded_at TEXT NOT NULL DEFAULT '',
+                FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_task_reward_claims_user ON task_reward_claims(user_id)")
+
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS notes (
-                key TEXT PRIMARY KEY,
+                key TEXT NOT NULL,
+                owner_user_id INTEGER NOT NULL,
                 content TEXT DEFAULT '',
-                updated_at TEXT DEFAULT ''
+                updated_at TEXT DEFAULT '',
+                UNIQUE(owner_user_id, key),
+                FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE
             )
             """
         )
@@ -95,9 +150,11 @@ def _init_db_for_path(db_path: Path) -> None:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS reward_wallet (
-                id INTEGER PRIMARY KEY CHECK (id = 1),
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL UNIQUE,
                 spent_points REAL NOT NULL DEFAULT 0,
-                updated_at TEXT NOT NULL DEFAULT ''
+                updated_at TEXT NOT NULL DEFAULT '',
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
             )
             """
         )
@@ -107,8 +164,10 @@ def _init_db_for_path(db_path: Path) -> None:
             CREATE TABLE IF NOT EXISTS monthly_tasks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
+                owner_user_id INTEGER NOT NULL,
                 created_at TEXT NOT NULL DEFAULT '',
-                updated_at TEXT NOT NULL DEFAULT ''
+                updated_at TEXT NOT NULL DEFAULT '',
+                FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE
             )
             """
         )
@@ -136,8 +195,10 @@ def _init_db_for_path(db_path: Path) -> None:
                 schedule_type TEXT NOT NULL DEFAULT 'daily',
                 reminder_time TEXT NOT NULL DEFAULT '08:00',
                 active INTEGER NOT NULL DEFAULT 1,
+                owner_user_id INTEGER,
                 created_at TEXT NOT NULL DEFAULT '',
-                updated_at TEXT NOT NULL DEFAULT ''
+                updated_at TEXT NOT NULL DEFAULT '',
+                FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE
             )
             """
         )
@@ -168,9 +229,11 @@ def _init_db_for_path(db_path: Path) -> None:
                 total_amount REAL NOT NULL DEFAULT 0,
                 monthly_amount REAL NOT NULL DEFAULT 0,
                 due_day INTEGER NOT NULL DEFAULT 0,
+                owner_user_id INTEGER NOT NULL,
                 note TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL DEFAULT '',
-                updated_at TEXT NOT NULL DEFAULT ''
+                updated_at TEXT NOT NULL DEFAULT '',
+                FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE
             )
             """
         )
@@ -190,12 +253,14 @@ def _init_db_for_path(db_path: Path) -> None:
         )
 
         _ensure_column(conn, "modules", "category", "TEXT DEFAULT 'praca'")
+        _ensure_column(conn, "modules", "owner_user_id", "INTEGER")
         _ensure_column(conn, "tasks", "priority", "TEXT DEFAULT ''")
         _ensure_column(conn, "tasks", "description", "TEXT DEFAULT ''")
         _ensure_column(conn, "tasks", "due_date", "TEXT DEFAULT ''")
         _ensure_column(conn, "tasks", "due_time", "TEXT DEFAULT ''")
         _ensure_column(conn, "tasks", "estimated_time", "INTEGER DEFAULT 0")
         _ensure_column(conn, "tasks", "points_weight", "REAL DEFAULT 1")
+        _ensure_column(conn, "tasks", "owner_user_id", "INTEGER")
         _ensure_column(conn, "task_subtasks", "title", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "task_subtasks", "position", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(conn, "task_subtasks", "done", "INTEGER NOT NULL DEFAULT 0")
@@ -209,6 +274,7 @@ def _init_db_for_path(db_path: Path) -> None:
         _ensure_column(conn, "task_subtasks", "created_at", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "task_subtasks", "updated_at", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "monthly_tasks", "due_day", "INTEGER DEFAULT 0")
+        _ensure_column(conn, "monthly_tasks", "owner_user_id", "INTEGER")
         _ensure_column(conn, "monthly_tasks", "repeat_type", "TEXT NOT NULL DEFAULT 'monthly'")
         _ensure_column(conn, "monthly_tasks", "repeat_weekday", "INTEGER NOT NULL DEFAULT 1")
         _ensure_column(conn, "monthly_tasks", "created_at", "TEXT NOT NULL DEFAULT ''")
@@ -218,6 +284,7 @@ def _init_db_for_path(db_path: Path) -> None:
         _ensure_column(conn, "medication_reminders", "schedule_type", "TEXT NOT NULL DEFAULT 'daily'")
         _ensure_column(conn, "medication_reminders", "reminder_time", "TEXT NOT NULL DEFAULT '08:00'")
         _ensure_column(conn, "medication_reminders", "active", "INTEGER NOT NULL DEFAULT 1")
+        _ensure_column(conn, "medication_reminders", "owner_user_id", "INTEGER")
         _ensure_column(conn, "medication_reminders", "created_at", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "medication_reminders", "updated_at", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "medication_states", "done", "INTEGER NOT NULL DEFAULT 0")
@@ -229,6 +296,7 @@ def _init_db_for_path(db_path: Path) -> None:
         _ensure_column(conn, "debts", "monthly_amount", "REAL NOT NULL DEFAULT 0")
         _ensure_column(conn, "debts", "due_day", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(conn, "debts", "note", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "debts", "owner_user_id", "INTEGER")
         _ensure_column(conn, "debts", "created_at", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "debts", "updated_at", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "debt_payment_states", "done", "INTEGER NOT NULL DEFAULT 0")
@@ -288,21 +356,12 @@ def _init_db_for_path(db_path: Path) -> None:
         conn.execute("UPDATE debts SET updated_at = '' WHERE updated_at IS NULL")
         conn.execute("UPDATE debt_payment_states SET done = 0 WHERE done IS NULL")
         conn.execute("UPDATE debt_payment_states SET updated_at = '' WHERE updated_at IS NULL")
-        conn.execute(
-            """
-            INSERT INTO reward_wallet (id, spent_points, updated_at)
-            VALUES (1, 0, '')
-            ON CONFLICT(id) DO NOTHING
-            """
-        )
-
         conn.commit()
 
 
 def init_db() -> None:
-    for db_path in list_unique_db_paths():
-        _init_db_for_path(db_path)
+    _init_db()
 
 
 def init_db_for_username(username: str) -> None:
-    _init_db_for_path(get_db_path_for_username(username))
+    _init_db()

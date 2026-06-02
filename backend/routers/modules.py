@@ -1,5 +1,7 @@
 from fastapi import APIRouter, HTTPException
 
+from backend.accounts import get_user_by_username
+from backend.auth import get_request_user
 from backend.db import get_db
 from backend.schemas import ModuleCreate, ModuleUpdate
 from backend.utils import normalize_module_category
@@ -7,23 +9,80 @@ from backend.utils import normalize_module_category
 router = APIRouter()
 
 
+def _current_user_id() -> int:
+    account = get_user_by_username(get_request_user())
+    if not account:
+        raise HTTPException(status_code=401, detail="Brak aktywnego uzytkownika.")
+    return account.id
+
+
 @router.get("/modules")
 def get_modules():
+    current_user_id = _current_user_id()
     with get_db() as conn:
         query = """
             SELECT m.*,
-            (SELECT COUNT(*) FROM tasks WHERE module_id = m.id) AS total_tasks,
-            (SELECT COUNT(*) FROM tasks WHERE module_id = m.id AND status = 'gotowe') AS done_tasks
+            COALESCE(u.username, '') AS owner_username,
+            CASE WHEN m.owner_user_id = ? THEN 0 ELSE 1 END AS is_shared,
+            (
+                SELECT COUNT(*)
+                FROM tasks t
+                WHERE t.module_id = m.id
+                  AND (
+                    t.owner_user_id = ?
+                    OR EXISTS (
+                        SELECT 1
+                        FROM task_shares s
+                        WHERE s.task_id = t.id
+                          AND s.shared_user_id = ?
+                    )
+                  )
+            ) AS total_tasks,
+            (
+                SELECT COUNT(*)
+                FROM tasks t
+                WHERE t.module_id = m.id
+                  AND t.status = 'gotowe'
+                  AND (
+                    t.owner_user_id = ?
+                    OR EXISTS (
+                        SELECT 1
+                        FROM task_shares s
+                        WHERE s.task_id = t.id
+                          AND s.shared_user_id = ?
+                    )
+                  )
+            ) AS done_tasks
             FROM modules m
+            LEFT JOIN users u ON u.id = m.owner_user_id
+            WHERE m.owner_user_id = ?
+               OR EXISTS (
+                    SELECT 1
+                    FROM tasks t
+                    JOIN task_shares s ON s.task_id = t.id
+                    WHERE t.module_id = m.id
+                      AND s.shared_user_id = ?
+               )
         """
-        modules = [dict(row) for row in conn.execute(query).fetchall()]
+        params = (
+            current_user_id,
+            current_user_id,
+            current_user_id,
+            current_user_id,
+            current_user_id,
+            current_user_id,
+            current_user_id,
+        )
+        modules = [dict(row) for row in conn.execute(query, params).fetchall()]
         for module in modules:
             module["category"] = normalize_module_category(module.get("category"))
+            module["is_shared"] = bool(module.get("is_shared"))
         return modules
 
 
 @router.post("/modules")
 def add_module(payload: ModuleCreate):
+    current_user_id = _current_user_id()
     clean_name = (payload.name or "").strip()
     if not clean_name:
         raise HTTPException(status_code=400, detail="Nazwa modulu nie moze byc pusta")
@@ -32,8 +91,8 @@ def add_module(payload: ModuleCreate):
 
     with get_db() as conn:
         cur = conn.execute(
-            "INSERT INTO modules (name, category) VALUES (?, ?)",
-            (clean_name, clean_category),
+            "INSERT INTO modules (name, category, owner_user_id) VALUES (?, ?, ?)",
+            (clean_name, clean_category, current_user_id),
         )
         conn.commit()
 
@@ -42,6 +101,7 @@ def add_module(payload: ModuleCreate):
 
 @router.put("/modules/{module_id}")
 def update_module(module_id: int, payload: ModuleUpdate):
+    current_user_id = _current_user_id()
     update_data = payload.model_dump(exclude_none=True)
     if not update_data:
         return {"status": "no_updates"}
@@ -58,9 +118,14 @@ def update_module(module_id: int, payload: ModuleUpdate):
         update_data["category"] = normalize_module_category(update_data["category"])
 
     with get_db() as conn:
-        module = conn.execute("SELECT * FROM modules WHERE id = ?", (module_id,)).fetchone()
+        module = conn.execute(
+            "SELECT * FROM modules WHERE id = ?",
+            (module_id,),
+        ).fetchone()
         if not module:
             raise HTTPException(status_code=404, detail="Modul nie znaleziony")
+        if int(module["owner_user_id"] or 0) != current_user_id:
+            raise HTTPException(status_code=403, detail="Tylko wlasciciel moze edytowac modul")
 
         if not update_data:
             return {"status": "no_updates"}
@@ -75,10 +140,13 @@ def update_module(module_id: int, payload: ModuleUpdate):
 
 @router.delete("/modules/{module_id}")
 def delete_module(module_id: int):
+    current_user_id = _current_user_id()
     with get_db() as conn:
         module = conn.execute("SELECT * FROM modules WHERE id = ?", (module_id,)).fetchone()
         if not module:
             raise HTTPException(status_code=404, detail="Modul nie znaleziony")
+        if int(module["owner_user_id"] or 0) != current_user_id:
+            raise HTTPException(status_code=403, detail="Tylko wlasciciel moze usunac modul")
 
         deleted_tasks = conn.execute(
             "SELECT COUNT(*) FROM tasks WHERE module_id = ?",
@@ -94,14 +162,42 @@ def delete_module(module_id: int):
 
 @router.get("/modules/{module_id}/progress")
 def get_progress(module_id: int):
+    current_user_id = _current_user_id()
     with get_db() as conn:
         total = conn.execute(
-            "SELECT COUNT(*) FROM tasks WHERE module_id = ?",
-            (module_id,),
+            """
+            SELECT COUNT(*)
+            FROM tasks t
+            WHERE t.module_id = ?
+              AND (
+                t.owner_user_id = ?
+                OR EXISTS (
+                    SELECT 1
+                    FROM task_shares s
+                    WHERE s.task_id = t.id
+                      AND s.shared_user_id = ?
+                )
+              )
+            """,
+            (module_id, current_user_id, current_user_id),
         ).fetchone()[0]
         done = conn.execute(
-            "SELECT COUNT(*) FROM tasks WHERE module_id = ? AND status = 'gotowe'",
-            (module_id,),
+            """
+            SELECT COUNT(*)
+            FROM tasks t
+            WHERE t.module_id = ?
+              AND t.status = 'gotowe'
+              AND (
+                t.owner_user_id = ?
+                OR EXISTS (
+                    SELECT 1
+                    FROM task_shares s
+                    WHERE s.task_id = t.id
+                      AND s.shared_user_id = ?
+                )
+              )
+            """,
+            (module_id, current_user_id, current_user_id),
         ).fetchone()[0]
 
     return {"percent": (done / total * 100) if total > 0 else 0}

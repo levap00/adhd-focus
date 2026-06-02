@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 import requests
 from fastapi import FastAPI
 
-from backend.accounts import ACCOUNTS, PRIMARY_ACCOUNT
+from backend.accounts import ACCOUNTS, PRIMARY_ACCOUNT, get_user_by_username
 from backend.auth import get_request_user, reset_request_user, set_request_user
 from backend.db import get_db
 from backend.utils import normalize_module_category, normalize_priority, normalize_status, utc_now_iso
@@ -89,6 +89,11 @@ TELEGRAM_DEFAULT_ESTIMATED_MINUTES = _parse_positive_int(
     os.getenv("TELEGRAM_DEFAULT_ESTIMATED_MINUTES", "30"),
     default=30,
     minimum=5,
+)
+TELEGRAM_SCHEDULE_GRACE_MINUTES = _parse_positive_int(
+    os.getenv("TELEGRAM_SCHEDULE_GRACE_MINUTES", "10"),
+    default=10,
+    minimum=1,
 )
 
 
@@ -193,6 +198,12 @@ def _as_account(username: str):
         reset_request_user(token)
 
 
+def _current_user_id() -> int:
+    username = get_request_user() or PRIMARY_ACCOUNT.username
+    account = get_user_by_username(username)
+    return account.id if account else PRIMARY_ACCOUNT.id
+
+
 def _get_tz() -> ZoneInfo:
     try:
         return ZoneInfo(TELEGRAM_TIMEZONE)
@@ -262,6 +273,7 @@ def _truncate_task_lines(tasks: list[dict], limit: int = 6) -> str:
 
 
 def _load_open_tasks() -> list[dict]:
+    user_id = _current_user_id()
     with get_db() as conn:
         rows = conn.execute(
             """
@@ -269,17 +281,42 @@ def _load_open_tasks() -> list[dict]:
             FROM tasks t
             LEFT JOIN modules m ON m.id = t.module_id
             WHERE t.status != 'gotowe'
-            """
+              AND (
+                t.owner_user_id = ?
+                OR EXISTS (
+                    SELECT 1
+                    FROM task_shares s
+                    WHERE s.task_id = t.id
+                      AND s.shared_user_id = ?
+                )
+              )
+            """,
+            (user_id, user_id),
         ).fetchall()
     return [dict(row) for row in rows]
 
 
 def _count_done_today(today_key: str) -> int:
+    user_id = _current_user_id()
     marker = f"[Done: {today_key}]"
     with get_db() as conn:
         row = conn.execute(
-            "SELECT COUNT(*) AS total FROM tasks WHERE status = 'gotowe' AND description LIKE ?",
-            (f"%{marker}%",),
+            """
+            SELECT COUNT(*) AS total
+            FROM tasks t
+            WHERE t.status = 'gotowe'
+              AND t.description LIKE ?
+              AND (
+                t.owner_user_id = ?
+                OR EXISTS (
+                    SELECT 1
+                    FROM task_shares s
+                    WHERE s.task_id = t.id
+                      AND s.shared_user_id = ?
+                )
+              )
+            """,
+            (f"%{marker}%", user_id, user_id),
         ).fetchone()
     return int(row["total"] if row else 0)
 
@@ -310,6 +347,7 @@ def _is_medication_scheduled(schedule_type: str, day: date) -> bool:
 
 
 def _load_medication_reminders_for_date(day: date) -> list[dict]:
+    user_id = _current_user_id()
     day_key = day.isoformat()
     with get_db() as conn:
         rows = conn.execute(
@@ -325,9 +363,10 @@ def _load_medication_reminders_for_date(day: date) -> list[dict]:
                 ON ms.medication_id = mr.id
                AND ms.date_key = ?
             WHERE mr.active = 1
+              AND mr.owner_user_id = ?
             ORDER BY mr.reminder_time ASC, mr.name COLLATE NOCASE ASC
             """,
-            (day_key,),
+            (day_key, user_id),
         ).fetchall()
 
     return [dict(row) for row in rows if _is_medication_scheduled(row["schedule_type"], day)]
@@ -342,22 +381,33 @@ def _build_medication_message(medication: dict, now: datetime) -> str:
     )
 
 
-def _read_marker(marker_key: str) -> bool:
+def _claim_marker(marker_key: str) -> bool:
+    user_id = _current_user_id()
+    timestamp = utc_now_iso()
     with get_db() as conn:
-        row = conn.execute("SELECT 1 FROM notes WHERE key = ?", (marker_key,)).fetchone()
-    return bool(row)
+        cursor = conn.execute(
+            """
+            INSERT INTO notes(owner_user_id, key, content, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(owner_user_id, key) DO NOTHING
+            """,
+            (user_id, marker_key, "pending", timestamp),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
 
 
 def _write_marker(marker_key: str) -> None:
+    user_id = _current_user_id()
     timestamp = utc_now_iso()
     with get_db() as conn:
         conn.execute(
             """
-            INSERT INTO notes(key, content, updated_at)
-            VALUES (?, ?, ?)
-            ON CONFLICT(key) DO UPDATE SET content=excluded.content, updated_at=excluded.updated_at
+            INSERT INTO notes(owner_user_id, key, content, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(owner_user_id, key) DO UPDATE SET content=excluded.content, updated_at=excluded.updated_at
             """,
-            (marker_key, "1", timestamp),
+            (user_id, marker_key, "1", timestamp),
         )
         conn.commit()
 
@@ -469,7 +519,7 @@ def _process_medication_reminders(now: datetime, username: str) -> None:
             continue
 
         marker_key = f"telegram-medication:{medication['id']}:{today.isoformat()}:{bucket}"
-        if _read_marker(marker_key):
+        if not _claim_marker(marker_key):
             continue
 
         _send_to_account(username, _build_medication_message(medication, now))
@@ -486,8 +536,12 @@ def _process_scheduled_notifications_for_account(route: TelegramAccountRoute, no
             if now < scheduled_at:
                 continue
 
-            marker_key = f"telegram-scheduled:{event_key}:{now.date().isoformat()}"
-            if _read_marker(marker_key):
+            delay = now - scheduled_at
+            if delay > timedelta(minutes=TELEGRAM_SCHEDULE_GRACE_MINUTES):
+                continue
+
+            marker_key = f"telegram-scheduled:{event_key}:{time_raw}:{now.date().isoformat()}"
+            if not _claim_marker(marker_key):
                 continue
 
             text = _build_scheduled_message(event_key, now, open_tasks)
@@ -681,6 +735,7 @@ def _parse_quick_add_payload(raw_payload: str, now_local: datetime) -> tuple[Opt
 
 
 def _find_or_create_module(route: TelegramAccountRoute, module_hint: str) -> tuple[int, str, bool]:
+    user_id = _current_user_id()
     requested_name = _normalize_module_hint(module_hint)
     if not requested_name:
         requested_name = _account_env_value("TELEGRAM_DEFAULT_MODULE_NAME", route.account_index, TELEGRAM_DEFAULT_MODULE_NAME)
@@ -693,28 +748,35 @@ def _find_or_create_module(route: TelegramAccountRoute, module_hint: str) -> tup
 
     with get_db() as conn:
         exact = conn.execute(
-            "SELECT id, name FROM modules WHERE lower(name) = lower(?) LIMIT 1",
-            (requested_name,),
+            "SELECT id, name FROM modules WHERE owner_user_id = ? AND lower(name) = lower(?) LIMIT 1",
+            (user_id, requested_name),
         ).fetchone()
         if exact:
             return int(exact["id"]), exact["name"] or requested_name, False
 
         similar = conn.execute(
-            "SELECT id, name FROM modules WHERE lower(name) LIKE lower(?) ORDER BY id LIMIT 1",
-            (f"%{requested_name}%",),
+            """
+            SELECT id, name
+            FROM modules
+            WHERE owner_user_id = ? AND lower(name) LIKE lower(?)
+            ORDER BY id
+            LIMIT 1
+            """,
+            (user_id, f"%{requested_name}%"),
         ).fetchone()
         if similar:
             return int(similar["id"]), similar["name"] or requested_name, False
 
         cur = conn.execute(
-            "INSERT INTO modules (name, category) VALUES (?, ?)",
-            (requested_name[:120], default_category),
+            "INSERT INTO modules (name, category, owner_user_id) VALUES (?, ?, ?)",
+            (requested_name[:120], default_category, user_id),
         )
         conn.commit()
         return int(cur.lastrowid), requested_name[:120], True
 
 
 def _create_task_from_telegram(route: TelegramAccountRoute, payload: dict) -> dict:
+    user_id = _current_user_id()
     module_id, module_name, module_created = _find_or_create_module(route, payload.get("module_hint") or "")
     due_date = (payload.get("due_date") or "").strip()
     due_time = (payload.get("due_time") or "").strip()
@@ -724,8 +786,19 @@ def _create_task_from_telegram(route: TelegramAccountRoute, payload: dict) -> di
     with get_db() as conn:
         cur = conn.execute(
             """
-            INSERT INTO tasks (name, module_id, status, estimated_time, points_weight, priority, description, due_date, due_time)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO tasks (
+                name,
+                module_id,
+                status,
+                estimated_time,
+                points_weight,
+                priority,
+                description,
+                due_date,
+                due_time,
+                owner_user_id
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 payload.get("name", "").strip()[:180],
@@ -737,6 +810,7 @@ def _create_task_from_telegram(route: TelegramAccountRoute, payload: dict) -> di
                 "Dodane z Telegrama.",
                 due_date,
                 due_time if due_date else "",
+                user_id,
             ),
         )
         task_id = int(cur.lastrowid)
