@@ -1,16 +1,24 @@
 import sqlite3
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DB_PATH = PROJECT_ROOT / "tasks.db"
+from backend.accounts import get_db_path_for_username, list_unique_db_paths
+from backend.auth import get_request_user
 
 
-
-def get_db() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
+def _connect_db(db_path: Path) -> sqlite3.Connection:
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
+
+
+def _current_db_path() -> Path:
+    return get_db_path_for_username(get_request_user())
+
+
+def get_db() -> sqlite3.Connection:
+    return _connect_db(_current_db_path())
 
 
 
@@ -21,8 +29,8 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) 
 
 
 
-def init_db() -> None:
-    with get_db() as conn:
+def _init_db_for_path(db_path: Path) -> None:
+    with _connect_db(db_path) as conn:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS modules (
@@ -62,6 +70,10 @@ def init_db() -> None:
                 estimated_time INTEGER NOT NULL DEFAULT 0,
                 points_weight REAL NOT NULL DEFAULT 0,
                 done_at TEXT NOT NULL DEFAULT '',
+                source_task_id INTEGER,
+                source_module_id INTEGER,
+                source_due_date TEXT NOT NULL DEFAULT '',
+                source_due_time TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL DEFAULT '',
                 updated_at TEXT NOT NULL DEFAULT '',
                 FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
@@ -190,6 +202,10 @@ def init_db() -> None:
         _ensure_column(conn, "task_subtasks", "estimated_time", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(conn, "task_subtasks", "points_weight", "REAL NOT NULL DEFAULT 0")
         _ensure_column(conn, "task_subtasks", "done_at", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "task_subtasks", "source_task_id", "INTEGER")
+        _ensure_column(conn, "task_subtasks", "source_module_id", "INTEGER")
+        _ensure_column(conn, "task_subtasks", "source_due_date", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "task_subtasks", "source_due_time", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "task_subtasks", "created_at", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "task_subtasks", "updated_at", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "monthly_tasks", "due_day", "INTEGER DEFAULT 0")
@@ -233,6 +249,8 @@ def init_db() -> None:
         conn.execute("UPDATE task_subtasks SET estimated_time = 0 WHERE estimated_time IS NULL OR estimated_time < 0")
         conn.execute("UPDATE task_subtasks SET points_weight = 0 WHERE points_weight IS NULL OR points_weight < 0")
         conn.execute("UPDATE task_subtasks SET done_at = '' WHERE done_at IS NULL")
+        conn.execute("UPDATE task_subtasks SET source_due_date = '' WHERE source_due_date IS NULL")
+        conn.execute("UPDATE task_subtasks SET source_due_time = '' WHERE source_due_time IS NULL")
         conn.execute("UPDATE task_subtasks SET created_at = '' WHERE created_at IS NULL")
         conn.execute("UPDATE task_subtasks SET updated_at = '' WHERE updated_at IS NULL")
         conn.execute("UPDATE task_subtasks SET done = 1 WHERE done NOT IN (0, 1)")
@@ -279,3 +297,8 @@ def init_db() -> None:
         )
 
         conn.commit()
+
+
+def init_db() -> None:
+    for db_path in list_unique_db_paths():
+        _init_db_for_path(db_path)

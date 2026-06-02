@@ -7,9 +7,9 @@ from backend.auth import (
     SESSION_COOKIE_NAME,
     SESSION_REMEMBER_TTL_SECONDS,
     SESSION_TTL_SECONDS,
-    authenticate_credentials,
     create_session_token,
     get_session_user,
+    resolve_authenticated_username,
     should_set_secure_cookie,
 )
 
@@ -139,11 +139,12 @@ async def login_submit(request: Request):
     password = form_values.get("password", [""])[0] or ""
     remember = form_values.get("remember", [""])[0] or ""
 
-    if not authenticate_credentials(username, password):
+    authenticated_username = resolve_authenticated_username(username, password)
+    if not authenticated_username:
         return RedirectResponse(url="/login?error=1", status_code=303)
 
     remember_user = str(remember).strip().lower() in {"1", "true", "yes", "on"}
-    token = create_session_token(username=username, remember=remember_user)
+    token = create_session_token(username=authenticated_username, remember=remember_user)
 
     response = RedirectResponse(url="/", status_code=303)
     response.set_cookie(

@@ -19,6 +19,11 @@ class TaskSubtaskPayload(BaseModel):
     done: bool = False
     estimated_time: int = 0
     points_weight: float = 0.0
+    done_at: str = ""
+    source_task_id: Optional[int] = None
+    source_module_id: Optional[int] = None
+    source_due_date: str = ""
+    source_due_time: str = ""
 
 
 class TaskCreate(BaseModel):
@@ -47,6 +52,13 @@ class TaskUpdate(BaseModel):
     points_weight: Optional[float] = None
     allow_time_overflow: Optional[bool] = None
     subtasks: Optional[list[TaskSubtaskPayload]] = None
+
+
+class TaskMergePayload(BaseModel):
+    source_task_id: int
+    target_task_id: int
+    name: str = ""
+    allow_time_overflow: bool = False
 
 
 class NotePayload(BaseModel):

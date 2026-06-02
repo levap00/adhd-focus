@@ -7,12 +7,12 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/app.css?v=20260512-2">
+    <link rel="stylesheet" href="/static/app.css?v=20260520-1">
     <script src="https://cdn.tailwindcss.com"></script>
-    <script defer src="/static/app.js?v=20260512-2"></script>
+    <script defer src="/static/app.js?v=20260520-1"></script>
     <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
 </head>
-<body x-data="app()" x-init="init()" @keydown.window="handleKeydown($event)" @pointermove.window="moveCanvasDrag($event)" @pointerup.window="endCanvasDrag()" :class="theme === 'dark' ? 'theme-dark' : 'theme-light'">
+<body x-data="app()" x-init="init()" @keydown.window="handleKeydown($event)" @resize.window="handleViewportResize()" @pointermove.window="moveCanvasDrag($event)" @pointerup.window="endCanvasDrag()" :class="theme === 'dark' ? 'theme-dark' : 'theme-light'">
     <div class="min-h-screen">
         <header class="topbar z-40 border-b border-slate-200/70">
             <div class="mx-auto max-w-[1850px] px-4 py-2 md:px-6">
@@ -25,18 +25,19 @@
                         </div>
                     </div>
 
-                    <div class="flex flex-wrap gap-2">
+                    <div class="topbar-actions flex flex-wrap gap-2">
                         <button @click="toggleTheme()" class="rounded-xl border border-slate-300/80 bg-white/80 px-3 py-2 text-xs font-bold text-slate-600 transition-colors hover:bg-slate-100" x-text="theme === 'dark' ? 'Jasny motyw' : 'Ciemny motyw'"></button>
                         <button @click="view = 'brain'" class="rounded-xl border border-slate-300/80 bg-white/80 px-3 py-2 text-xs font-bold text-slate-600 transition-colors hover:bg-slate-100">Brain dump</button>
                         <button @click="openNewTaskModal()" class="rounded-xl border border-slate-300/80 bg-white/90 px-3 py-2 text-xs font-bold text-slate-700 transition-colors hover:bg-slate-100">+ Zadanie</button>
                         <button @click="startFlow()" class="rounded-xl bg-emerald-600 px-3 py-2 text-xs font-bold text-white transition-colors hover:bg-emerald-700">Flow</button>
+                        <button @click="toggleMobileModules()" class="rounded-xl border border-slate-300/80 bg-white/90 px-3 py-2 text-xs font-bold text-slate-700 transition-colors hover:bg-slate-100 xl:hidden" x-text="mobileModulesOpen ? 'Ukryj moduly' : 'Moduly'"></button>
                         <form method="post" action="/auth/logout">
                             <button type="submit" class="rounded-xl border border-slate-300/80 bg-white/80 px-3 py-2 text-xs font-bold text-slate-600 transition-colors hover:bg-slate-100">Wyloguj</button>
                         </form>
                     </div>
                 </div>
 
-                <nav class="mt-2 flex flex-wrap gap-2">
+                <nav class="topbar-view-nav mt-2 flex gap-2">
                     <button @click="view = 'dash'" :class="view === 'dash' ? 'bg-slate-900 text-white' : 'bg-white/80 text-slate-600 border-slate-200 hover:bg-slate-50'" class="rounded-xl border px-3 py-2 text-xs font-bold transition-all">Pulpit</button>
                     <button @click="openAllTasksView()" :class="view === 'kanban' ? 'bg-slate-900 text-white' : 'bg-white/80 text-slate-600 border-slate-200 hover:bg-slate-50'" class="rounded-xl border px-3 py-2 text-xs font-bold transition-all">Zadania</button>
                     <button @click="view = 'global'" :class="view === 'global' ? 'bg-slate-900 text-white' : 'bg-white/80 text-slate-600 border-slate-200 hover:bg-slate-50'" class="rounded-xl border px-3 py-2 text-xs font-bold transition-all">Moduly</button>
@@ -94,8 +95,8 @@
             </div>
         </header>
 
-        <div class="mx-auto max-w-[1850px] px-4 py-4 md:px-6 xl:flex xl:items-start xl:gap-5">
-            <aside :class="sidebarCollapsed ? 'xl:w-[86px]' : 'xl:w-[300px]'" class="sidebar-panel space-y-3 xl:sticky xl:top-[86px] xl:shrink-0 xl:self-start">
+        <div class="mx-auto flex max-w-[1850px] flex-col gap-4 px-4 py-4 md:px-6 xl:flex-row xl:items-start xl:gap-5">
+            <aside x-show="!isMobileLayout || mobileModulesOpen" x-cloak :class="sidebarCollapsed ? 'xl:w-[86px]' : 'xl:w-[300px]'" class="sidebar-panel order-2 space-y-3 xl:order-1 xl:sticky xl:top-[86px] xl:shrink-0 xl:self-start">
                 <section class="card module-sidebar-card p-3">
                     <div class="mb-2 flex items-center justify-between">
                         <p x-show="!sidebarCollapsed" x-cloak class="text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">Moduly</p>
@@ -168,7 +169,7 @@
 
             </aside>
 
-            <main class="mt-4 min-w-0 flex-1 xl:mt-0">
+            <main class="mobile-main-shell order-1 min-w-0 flex-1 xl:order-2">
                 <template x-if="view === 'dash'">
                     <div x-cloak class="space-y-6">
                         <section class="card p-5 md:p-6">
@@ -441,11 +442,23 @@
 
                                                 <div class="mt-3 space-y-2">
                                                     <template x-for="task in getModuleTasksByStatus(module.id, col.id)" :key="task.id">
-                                                        <div @click="openTaskModal(task)" draggable="true" @dragstart.stop="startTaskDrag(task, $event)" @dragend="endTaskDrag()" :class="`priority-${task.priority} ${col.id === 'gotowe' ? 'kanban-mini-done-task' : ''}`" class="rounded-[20px] border border-slate-200 bg-white p-3 cursor-pointer transition-colors hover:bg-slate-50 cursor-grab active:cursor-grabbing">
+                                                        <div
+                                                            @click="openTaskModal(task)"
+                                                            draggable="true"
+                                                            @dragstart.stop="startTaskDrag(task, $event)"
+                                                            @dragend="endTaskDrag()"
+                                                            @dragover.prevent.stop="dragTaskOverTask(task, $event)"
+                                                            @dragleave.stop="clearTaskMergeTarget(task)"
+                                                            @drop.prevent.stop="dropTaskOnTask(task, $event)"
+                                                            :class="`priority-${task.priority} ${col.id === 'gotowe' ? 'kanban-mini-done-task' : ''} ${canDropTaskOnTask(task) ? 'task-merge-target' : ''} ${draggedTaskTargetId === task.id ? 'task-merge-target-active' : ''}`"
+                                                            class="relative rounded-[20px] border border-slate-200 bg-white p-3 cursor-pointer transition-colors hover:bg-slate-50 cursor-grab active:cursor-grabbing"
+                                                        >
                                                             <div class="flex items-start justify-between gap-2">
                                                                 <div class="flex items-center gap-1.5">
                                                                     <span x-show="hasPriority(task)" :class="getPriorityDotClass(task.priority)" class="h-2 w-2 rounded-full"></span>
                                                                     <span x-show="getTaskUrgencyLabel(task)" x-cloak :class="getUrgencyClass(task)" class="rounded-full px-2 py-1 text-[10px] font-bold" x-text="getTaskUrgencyLabel(task)"></span>
+                                                                    <span x-show="getTaskBundleLabel(task)" x-cloak class="rounded-full bg-cyan-50 px-2 py-1 text-[10px] font-bold text-cyan-700" x-text="getTaskBundleLabel(task)"></span>
+                                                                    <span x-show="draggedTaskTargetId === task.id" x-cloak class="task-merge-chip">Polacz</span>
                                                                 </div>
                                                                 <span x-show="col.id !== 'gotowe'" class="text-[10px] font-mono font-bold text-slate-400" x-text="task.estimated_time > 0 ? task.estimated_time + ' min' : ''"></span>
                                                             </div>
@@ -565,13 +578,18 @@
                                                             draggable="true"
                                                             @dragstart.stop="startTaskDrag(task, $event)"
                                                             @dragend="endTaskDrag()"
-                                                            :class="`card priority-${task.priority} group relative cursor-pointer p-2 transition-all hover:border-slate-300 cursor-grab active:cursor-grabbing ${taskScope === 'all' ? getModuleTheme(task.module_id).soft : ''} ${col.id === 'gotowe' ? 'kanban-task-done-card' : ''}`"
+                                                            @dragover.prevent.stop="dragTaskOverTask(task, $event)"
+                                                            @dragleave.stop="clearTaskMergeTarget(task)"
+                                                            @drop.prevent.stop="dropTaskOnTask(task, $event)"
+                                                            :class="`card priority-${task.priority} group relative cursor-pointer p-2 transition-all hover:border-slate-300 cursor-grab active:cursor-grabbing ${taskScope === 'all' ? getModuleTheme(task.module_id).soft : ''} ${col.id === 'gotowe' ? 'kanban-task-done-card' : ''} ${canDropTaskOnTask(task) ? 'task-merge-target' : ''} ${draggedTaskTargetId === task.id ? 'task-merge-target-active' : ''}`"
                                                         >
                                                             <button @click.stop="deleteTask(task.id)" class="absolute right-2 top-2 text-[11px] font-bold text-slate-300 opacity-0 transition-all hover:text-red-500 group-hover:opacity-100">✕</button>
                                                             <div class="mb-1.5 flex items-start justify-between gap-2 pr-5">
                                                                 <div class="flex flex-wrap items-center gap-1.5">
                                                                     <span x-show="hasPriority(task)" :class="getPriorityDotClass(task.priority)" class="h-2 w-2 rounded-full"></span>
                                                                     <span x-show="getTaskUrgencyLabel(task)" x-cloak :class="getUrgencyClass(task)" class="rounded-full px-2 py-0.5 text-[10px] font-bold" x-text="getTaskUrgencyLabel(task)"></span>
+                                                                    <span x-show="getTaskBundleLabel(task)" x-cloak class="rounded-full bg-cyan-50 px-2 py-0.5 text-[10px] font-bold text-cyan-700" x-text="getTaskBundleLabel(task)"></span>
+                                                                    <span x-show="draggedTaskTargetId === task.id" x-cloak class="task-merge-chip">Polacz</span>
                                                                 </div>
                                                                 <span x-show="col.id !== 'gotowe'" class="text-[10px] font-mono font-bold text-slate-400" x-text="task.estimated_time > 0 ? task.estimated_time + ' min' : ''"></span>
                                                             </div>
@@ -640,18 +658,36 @@
                                 ></span>
                             </div>
 
-                            <section class="calendar-day-agenda mt-5 rounded-[24px] border border-slate-200 bg-slate-50/70 p-4 md:p-5">
+                            <div class="mt-4 grid gap-2 md:hidden md:gap-0">
+                                <p class="text-[10px] font-black uppercase tracking-[0.16em] text-slate-400">Tryb mobilny</p>
+                                <div class="grid grid-cols-2 gap-2">
+                                    <button @click="calendarMobileSection = 'preview'" :class="calendarMobileSection === 'preview' ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-500 border-slate-200'" class="rounded-xl border px-3 py-2 text-xs font-bold transition-colors">3 dni</button>
+                                    <button @click="calendarMobileSection = 'month'" :class="calendarMobileSection === 'month' ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-500 border-slate-200'" class="rounded-xl border px-3 py-2 text-xs font-bold transition-colors">Pelny miesiac</button>
+                                </div>
+                            </div>
+
+                            <section x-show="!isMobileLayout || calendarMobileSection === 'preview'" x-cloak class="calendar-day-agenda mt-5 rounded-[24px] border border-slate-200 bg-slate-50/70 p-4 md:p-5">
                                 <div class="flex flex-wrap items-center justify-between gap-3">
                                     <div>
                                         <p class="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Podglad zadan</p>
-                                        <h4 class="mt-1 text-xl font-black text-slate-900">Najblizsze 3 dni obok siebie</h4>
+                                        <h4 class="mt-1 text-xl font-black text-slate-900">Najblizsze 3 dni na osi czasu</h4>
                                     </div>
                                     <span class="rounded-full bg-white px-3 py-1.5 text-xs font-bold text-slate-500" x-text="getCalendarPreviewEntriesCount() + ' pozycji'"></span>
                                 </div>
+                                <div class="mt-3 flex flex-wrap gap-2 md:hidden">
+                                    <template x-for="day in getCalendarPreviewDays()" :key="'mobile-day-tab-' + day.dateKey">
+                                        <button
+                                            @click="selectedDate = day.dateKey"
+                                            :class="selectedDate === day.dateKey ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-slate-600 border-slate-200'"
+                                            class="rounded-full border px-3 py-1.5 text-[11px] font-bold transition-colors"
+                                            x-text="formatCalendarPreviewWeekday(day.dateKey).slice(0, 3) + ' ' + formatCalendarPreviewDay(day.dateKey)"
+                                        ></button>
+                                    </template>
+                                </div>
 
-                                <div class="calendar-three-day-grid mt-4">
+                                <div class="calendar-three-day-stack mt-4">
                                     <template x-for="day in getCalendarPreviewDays()" :key="'preview-' + day.dateKey">
-                                        <article :class="day.isToday ? 'calendar-preview-day-today' : ''" class="calendar-preview-day">
+                                        <article :class="day.isToday ? 'calendar-preview-day-today' : ''" class="calendar-preview-day calendar-preview-day-stacked">
                                             <div class="mb-3 flex items-start justify-between gap-3">
                                                 <button @click="selectedDate = day.dateKey" class="text-left">
                                                     <p class="text-[10px] font-black uppercase tracking-[0.16em] text-slate-400" x-text="formatCalendarPreviewWeekday(day.dateKey)"></p>
@@ -668,30 +704,47 @@
                                                 </div>
                                             </div>
 
-                                            <div class="calendar-preview-list space-y-2">
-                                                <template x-for="entry in day.entries" :key="'preview-row-' + entry.id">
-                                                    <div>
-                                                        <button
-                                                            x-show="entry.type === 'task'"
-                                                            @click="openTaskModal(entry.item)"
-                                                            :class="`calendar-agenda-row priority-${entry.item.priority} ${getCalendarTaskStateClass(entry)}`"
-                                                            type="button"
-                                                        >
-                                                            <div class="flex flex-wrap items-center gap-2">
-                                                                <span class="calendar-entry-time calendar-agenda-time" x-text="getCalendarEntryTime(entry)"></span>
-                                                                <span :class="getCalendarTaskUrgencyClass(entry)" class="calendar-entry-urgency" x-text="getCalendarTaskUrgencyLabel(entry)"></span>
-                                                                <span :class="getCalendarTaskStatusClass(entry)" class="calendar-entry-status" x-text="getCalendarTaskStatusLabel(entry)"></span>
-                                                            </div>
-                                                            <div class="min-w-0">
-                                                                <div class="calendar-agenda-title" x-text="entry.item.name"></div>
-                                                                <div class="mt-0.5 text-[11px] font-semibold text-slate-500">
-                                                                    <span x-text="getModuleName(entry.item.module_id)"></span>
-                                                                    <span x-show="getCalendarCarryOverLabel(entry)" x-cloak> • </span>
-                                                                    <span x-show="getCalendarCarryOverLabel(entry)" x-cloak x-text="getCalendarCarryOverLabel(entry)"></span>
-                                                                </div>
-                                                            </div>
-                                                        </button>
+                                            <div x-show="day.timelineEntries.length > 0" class="calendar-timeline-shell">
+                                                <div class="calendar-timeline-scroll">
+                                                    <div class="calendar-timeline-canvas">
+                                                        <div class="calendar-timeline-axis" :style="getCalendarTimelineBoardStyle(day)">
+                                                            <template x-for="marker in getCalendarTimelineHourMarkers(day)" :key="'timeline-axis-' + day.dateKey + '-' + marker.hour">
+                                                                <span class="calendar-timeline-hour-label" :style="`top:${marker.offsetPercent}%`" x-text="marker.label"></span>
+                                                            </template>
+                                                        </div>
 
+                                                        <div class="calendar-timeline-board" :style="getCalendarTimelineBoardStyle(day)">
+                                                            <template x-for="marker in getCalendarTimelineHourMarkers(day)" :key="'timeline-grid-' + day.dateKey + '-' + marker.hour">
+                                                                <span class="calendar-timeline-gridline" :style="`top:${marker.offsetPercent}%`"></span>
+                                                            </template>
+
+                                                            <span x-show="day.isToday" x-cloak class="calendar-timeline-now-marker" :style="getCalendarTimelineNowStyle(day)"></span>
+
+                                                            <template x-for="entry in day.timelineEntries" :key="'timeline-entry-' + entry.id">
+                                                                <button
+                                                                    @click="openTaskModal(entry.item)"
+                                                                    :class="`calendar-timeline-task priority-${entry.item.priority} ${getCalendarTaskStateClass(entry)} ${getCalendarTimelineTaskDensityClass(entry)}`"
+                                                                    :style="getCalendarTimelineEntryStyle(entry, day)"
+                                                                    type="button"
+                                                                >
+                                                                    <div class="calendar-timeline-task-time" x-text="getCalendarTimelineTimeRangeLabel(entry)"></div>
+                                                                    <div class="calendar-timeline-task-title" x-text="entry.item.name"></div>
+                                                                    <div class="calendar-timeline-task-meta">
+                                                                        <span class="calendar-timeline-task-module" x-text="getModuleName(entry.item.module_id)"></span>
+                                                                        <span x-show="getCalendarCarryOverLabel(entry)" x-cloak class="calendar-timeline-task-carry" x-text="getCalendarCarryOverLabel(entry)"></span>
+                                                                        <span :class="getCalendarTaskUrgencyClass(entry)" class="calendar-entry-urgency" x-text="getCalendarTaskUrgencyLabel(entry)"></span>
+                                                                        <span :class="getCalendarTaskStatusClass(entry)" class="calendar-entry-status" x-text="getCalendarTaskStatusLabel(entry)"></span>
+                                                                    </div>
+                                                                </button>
+                                                            </template>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            <div x-show="day.nonTaskEntries.length > 0" class="mt-3 space-y-2">
+                                                <template x-for="entry in day.nonTaskEntries" :key="'preview-extra-' + entry.id">
+                                                    <div>
                                                         <label x-show="entry.type === 'monthly'" class="calendar-agenda-row calendar-agenda-row-monthly">
                                                             <span class="calendar-entry-time calendar-agenda-time">M</span>
                                                             <div class="min-w-0">
@@ -709,19 +762,19 @@
                                                         </label>
                                                     </div>
                                                 </template>
-
-                                                <template x-if="day.entries.length === 0">
-                                                    <div class="rounded-2xl border border-dashed border-slate-300 bg-white px-4 py-7 text-center text-sm font-semibold text-slate-400">
-                                                        Brak pozycji na ten dzien.
-                                                    </div>
-                                                </template>
                                             </div>
+
+                                            <template x-if="day.entries.length === 0">
+                                                <div class="rounded-2xl border border-dashed border-slate-300 bg-white px-4 py-7 text-center text-sm font-semibold text-slate-400">
+                                                    Brak pozycji na ten dzien.
+                                                </div>
+                                            </template>
                                         </article>
                                     </template>
                                 </div>
                             </section>
 
-                            <div class="calendar-month-wrapper mt-4">
+                            <div x-show="!isMobileLayout || calendarMobileSection === 'month'" x-cloak class="calendar-month-wrapper mt-4">
                                 <div class="mb-3 grid grid-cols-7 gap-2 md:gap-3">
                                     <template x-for="weekday in weekLabels" :key="weekday">
                                         <div class="px-1 text-center text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 md:text-[11px]" x-text="weekday"></div>
@@ -1315,12 +1368,19 @@
             </main>
         </div>
 
-        <button @click="openNewTaskModal(activeModule ? activeModule.id : null)" class="fixed bottom-4 right-4 z-40 rounded-full bg-emerald-600 px-5 py-3 text-sm font-black text-white shadow-[0_12px_24px_rgba(5,150,105,0.28)] transition-colors hover:bg-emerald-700 md:hidden">
+        <nav class="mobile-quick-nav md:hidden">
+            <button @click="view = 'dash'; closeMobileModules()" :class="view === 'dash' ? 'is-active' : ''" class="mobile-quick-nav-btn">Dzis</button>
+            <button @click="openAllTasksView(); closeMobileModules()" :class="view === 'kanban' ? 'is-active' : ''" class="mobile-quick-nav-btn">Zadania</button>
+            <button @click="openCalendarView(); closeMobileModules()" :class="view === 'calendar' ? 'is-active' : ''" class="mobile-quick-nav-btn">Kalendarz</button>
+            <button @click="toggleMobileModules()" :class="mobileModulesOpen ? 'is-active' : ''" class="mobile-quick-nav-btn">Moduly</button>
+        </nav>
+
+        <button @click="openNewTaskModal(activeModule ? activeModule.id : null)" class="mobile-add-task-button fixed right-4 z-40 rounded-full bg-emerald-600 px-5 py-3 text-sm font-black text-white shadow-[0_12px_24px_rgba(5,150,105,0.28)] transition-colors hover:bg-emerald-700 md:hidden">
             + Zadanie
         </button>
 
         <div x-show="taskModal" x-cloak class="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-slate-900/45 p-2 backdrop-blur-sm md:items-center md:p-4">
-            <div class="card task-modal-surface relative w-full max-w-4xl max-h-[94vh] overflow-y-auto p-4 md:p-7" @click.away="taskModal = false; isCreatingTask = false">
+            <div class="card task-modal-surface relative w-full max-w-6xl max-h-[94vh] overflow-y-auto p-4 md:p-7" @click.away="taskModal = false; isCreatingTask = false">
                 <div class="mb-4 border-b border-slate-200/80 pb-4">
                     <p class="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400" x-text="isCreatingTask ? 'Nowe zadanie' : 'Edycja zadania'"></p>
                     <input x-model="editingTask.name" class="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-xl font-black text-slate-900 outline-none transition-colors focus:border-emerald-400 md:text-[2rem]" placeholder="Nazwa zadania">
@@ -1380,7 +1440,7 @@
                     </div>
                 </div>
 
-                <div class="mt-4 grid gap-4 lg:grid-cols-[1.15fr_0.85fr]">
+                <div class="mt-4 grid gap-4 lg:grid-cols-[0.82fr_1.18fr] xl:grid-cols-[0.78fr_1.22fr]">
                     <div>
                         <label class="text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">Status</label>
                         <select x-model="editingTask.status" class="mt-1 w-full rounded-2xl border border-slate-200 bg-white p-3 text-sm font-bold outline-none transition-colors focus:border-emerald-300">
@@ -1392,40 +1452,8 @@
 
                         <label class="mt-4 block text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">Notatki</label>
                         <textarea x-model="editingTask.description" rows="5" class="mt-1 w-full rounded-[24px] border border-slate-200 bg-white p-4 text-sm leading-6 outline-none transition-colors focus:border-emerald-400" placeholder="Kontekst, kolejne kroki, blokery..."></textarea>
-                    </div>
 
-                    <div class="space-y-3">
-                        <div class="rounded-[24px] border border-slate-200 bg-slate-50/80 p-4">
-                            <div class="mb-2 flex items-center justify-between gap-2">
-                                <h4 class="text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">Podzadania</h4>
-                                <span class="rounded-full bg-white px-2 py-1 text-[10px] font-bold text-slate-500" x-text="(editingTask.subtasks || []).length + ' szt.'"></span>
-                            </div>
-                            <p class="mb-3 text-xs leading-5 text-slate-500">Kazde podzadanie ma wlasny czas i punkty. Punkty wpadaja w dzien odhaczenia podzadania.</p>
-                            <div class="max-h-[260px] space-y-2 overflow-y-auto pr-1">
-                                <template x-for="(subtask, index) in (editingTask.subtasks || [])" :key="subtask.id ? 'sub-' + subtask.id : 'draft-' + index">
-                                    <div class="rounded-xl border border-slate-200 bg-white px-2.5 py-2">
-                                        <div class="flex items-center gap-2">
-                                            <input type="checkbox" :checked="subtask.done" @change="toggleEditingSubtaskDone(subtask, $event.target.checked)" class="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500" />
-                                            <input x-model="subtask.title" class="w-full min-w-0 bg-transparent text-xs font-bold text-slate-700 outline-none" placeholder="Podzadanie..." />
-                                            <button @click="removeEditingSubtask(index)" class="rounded-lg px-2 py-1 text-[11px] font-bold text-rose-500 transition-colors hover:bg-rose-50 hover:text-rose-700">Usun</button>
-                                        </div>
-                                        <div class="mt-2 grid grid-cols-2 gap-2">
-                                            <label class="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[10px] font-bold text-slate-500">
-                                                Czas (min)
-                                                <input type="number" min="1" step="5" x-model.number="subtask.estimated_time" class="mt-1 w-full rounded border border-slate-200 bg-white px-2 py-1 text-xs font-bold text-slate-700 outline-none focus:border-emerald-300" />
-                                            </label>
-                                            <label class="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[10px] font-bold text-slate-500">
-                                                Punkty
-                                                <input type="number" min="0.1" step="0.1" x-model.number="subtask.points_weight" class="mt-1 w-full rounded border border-slate-200 bg-white px-2 py-1 text-xs font-bold text-slate-700 outline-none focus:border-emerald-300" />
-                                            </label>
-                                        </div>
-                                    </div>
-                                </template>
-                            </div>
-                            <button @click="addEditingSubtask()" class="mt-3 w-full rounded-2xl border border-slate-200 bg-white py-2.5 text-xs font-bold text-slate-600 transition-colors hover:bg-slate-100">+ Dodaj podzadanie</button>
-                        </div>
-
-                        <div x-show="editingTask.id" x-cloak class="rounded-[24px] border border-fuchsia-100 bg-fuchsia-50 p-4">
+                        <div x-show="editingTask.id" x-cloak class="mt-4 rounded-[24px] border border-fuchsia-100 bg-fuchsia-50 p-4">
                             <div class="mb-2 flex items-center gap-2">
                                 <span class="text-lg">AI</span>
                                 <h4 class="text-[10px] font-black uppercase tracking-[0.22em] text-fuchsia-700">Shredder</h4>
@@ -1435,6 +1463,39 @@
                                 <span x-show="!isShredding">Rozbij na mniejsze kroki</span>
                                 <span x-show="isShredding">Pracuje... to potrwa chwile</span>
                             </button>
+                        </div>
+                    </div>
+
+                    <div class="space-y-3">
+                        <div class="h-full rounded-[24px] border border-slate-200 bg-slate-50/80 p-4">
+                            <div class="mb-2 flex items-center justify-between gap-2">
+                                <h4 class="text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">Podzadania</h4>
+                                <span class="rounded-full bg-white px-2 py-1 text-[10px] font-bold text-slate-500" x-text="(editingTask.subtasks || []).length + ' szt.'"></span>
+                            </div>
+                            <p class="mb-3 text-xs leading-5 text-slate-500">Kazde podzadanie ma wlasny czas i punkty. Punkty wpadaja w dzien odhaczenia podzadania.</p>
+                            <div class="space-y-2">
+                                <template x-for="(subtask, index) in (editingTask.subtasks || [])" :key="subtask.id ? 'sub-' + subtask.id : 'draft-' + index">
+                                    <div class="rounded-xl border border-slate-200 bg-white px-2.5 py-2">
+                                        <div class="grid gap-2 md:grid-cols-[auto_minmax(0,1fr)_92px_82px_auto] md:items-center">
+                                            <input type="checkbox" :checked="subtask.done" @change="toggleEditingSubtaskDone(subtask, $event.target.checked)" class="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500" />
+                                            <div class="min-w-0">
+                                                <input x-model="subtask.title" class="w-full min-w-0 bg-transparent text-xs font-bold text-slate-700 outline-none" placeholder="Podzadanie..." />
+                                                <div x-show="getSubtaskSourceLabel(subtask)" x-cloak class="mt-0.5 text-[10px] font-bold text-slate-400" x-text="getSubtaskSourceLabel(subtask)"></div>
+                                            </div>
+                                            <label class="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[10px] font-bold text-slate-500">
+                                                Czas (min)
+                                                <input type="number" min="1" step="5" x-model.number="subtask.estimated_time" class="mt-1 w-full rounded border border-slate-200 bg-white px-2 py-1 text-xs font-bold text-slate-700 outline-none focus:border-emerald-300" />
+                                            </label>
+                                            <label class="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[10px] font-bold text-slate-500">
+                                                Punkty
+                                                <input type="number" min="0.1" step="0.1" x-model.number="subtask.points_weight" class="mt-1 w-full rounded border border-slate-200 bg-white px-2 py-1 text-xs font-bold text-slate-700 outline-none focus:border-emerald-300" />
+                                            </label>
+                                            <button @click="removeEditingSubtask(index)" class="rounded-lg px-2 py-1 text-[11px] font-bold text-rose-500 transition-colors hover:bg-rose-50 hover:text-rose-700">Usun</button>
+                                        </div>
+                                    </div>
+                                </template>
+                            </div>
+                            <button @click="addEditingSubtask()" class="mt-3 w-full rounded-2xl border border-slate-200 bg-white py-2.5 text-xs font-bold text-slate-600 transition-colors hover:bg-slate-100">+ Dodaj podzadanie</button>
                         </div>
                     </div>
                 </div>

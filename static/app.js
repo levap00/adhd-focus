@@ -31,6 +31,9 @@
                 calendarMode: 'month',
                 calendarCursor: '',
                 selectedDate: '',
+                isMobileLayout: false,
+                mobileModulesOpen: false,
+                calendarMobileSection: 'preview',
                 monthlyMonthKey: '',
                 monthlyTasks: [],
                 medicationsDate: '',
@@ -67,6 +70,7 @@
                     note: ''
                 },
                 draggedTaskId: null,
+                draggedTaskTargetId: null,
                 draggedModuleId: null,
                 moduleNotes: {},
                 moduleNoteTimers: {},
@@ -159,8 +163,27 @@
                     }
                 ],
 
+                detectMobileLayout() {
+                    return window.matchMedia('(max-width: 1279px)').matches;
+                },
+
+                handleViewportResize() {
+                    const isMobile = this.detectMobileLayout();
+                    this.isMobileLayout = isMobile;
+                    if (!isMobile) {
+                        this.mobileModulesOpen = true;
+                    }
+                },
+
                 async init() {
                     this.loadUIPreferences();
+                    this.handleViewportResize();
+                    if (!this.isMobileLayout) {
+                        this.mobileModulesOpen = true;
+                    }
+                    if (this.isMobileLayout && this.sidebarCollapsed !== true) {
+                        this.sidebarCollapsed = true;
+                    }
 
                     if (!this.calendarCursor) this.calendarCursor = this.getTodayKey();
                     if (!this.selectedDate) this.selectedDate = this.getTodayKey();
@@ -240,6 +263,16 @@
                     this.saveUIPreferences();
                 },
 
+                toggleMobileModules() {
+                    if (!this.isMobileLayout) return;
+                    this.mobileModulesOpen = !this.mobileModulesOpen;
+                },
+
+                closeMobileModules() {
+                    if (!this.isMobileLayout) return;
+                    this.mobileModulesOpen = false;
+                },
+
                 setFocusFilter(mode) {
                     this.focusFilter = mode;
                     this.saveUIPreferences();
@@ -252,6 +285,7 @@
                 openAllTasksView() {
                     this.setTaskScope('all');
                     this.view = 'kanban';
+                    this.closeMobileModules();
                 },
 
                 normalizeModuleCategory(category) {
@@ -350,6 +384,12 @@
                     return parsed;
                 },
 
+                normalizeOptionalId(value) {
+                    const parsed = Number(value);
+                    if (!Number.isFinite(parsed) || parsed <= 0) return null;
+                    return parsed;
+                },
+
                 normalizeSubtaskPointsWeight(value) {
                     const normalizedRaw = typeof value === 'string'
                         ? value.replace(',', '.').trim()
@@ -388,6 +428,10 @@
                             estimated_time: this.normalizeSubtaskEstimatedMinutes(item?.estimated_time),
                             points_weight: this.normalizeSubtaskPointsWeight(item?.points_weight),
                             done_at: item?.done_at || '',
+                            source_task_id: this.normalizeOptionalId(item?.source_task_id),
+                            source_module_id: this.normalizeOptionalId(item?.source_module_id),
+                            source_due_date: this.sanitizeDateKey(item?.source_due_date),
+                            source_due_time: this.sanitizeDueTime(item?.source_due_time, ''),
                             position: normalized.length
                         });
                     }
@@ -401,7 +445,11 @@
                         done: false,
                         estimated_time: 15,
                         points_weight: 1,
-                        done_at: ''
+                        done_at: '',
+                        source_task_id: null,
+                        source_module_id: null,
+                        source_due_date: '',
+                        source_due_time: ''
                     };
                 },
 
@@ -1075,11 +1123,18 @@
                     for (let offset = 0; offset < 3; offset++) {
                         const dateKey = this.shiftDateKey(startKey, offset);
                         const workload = this.getDayWorkloadSummary(dateKey);
+                        const entries = this.getCalendarAgendaEntriesForDate(dateKey);
+                        const dayDraft = { dateKey, entries };
+                        dayDraft.timelineMetrics = this.getCalendarTimelineMetrics(dayDraft, entries);
+                        dayDraft.timelineEntries = this.getCalendarTimelineTaskEntries(entries, dayDraft);
                         days.push({
                             dateKey,
                             isToday: dateKey === this.getTodayKey(),
                             isSelected: dateKey === this.selectedDate,
-                            entries: this.getCalendarAgendaEntriesForDate(dateKey),
+                            entries,
+                            timelineMetrics: dayDraft.timelineMetrics,
+                            timelineEntries: dayDraft.timelineEntries,
+                            nonTaskEntries: entries.filter(entry => entry?.type !== 'task'),
                             plannedMinutes: workload.plannedMinutes,
                             isOverLimit: workload.isOverLimit
                         });
@@ -1097,6 +1152,388 @@
 
                 formatCalendarPreviewDay(dateKey) {
                     return new Intl.DateTimeFormat('pl-PL', { day: 'numeric', month: 'long' }).format(this.keyToDate(dateKey));
+                },
+
+                getCalendarTimelineWindow(day = null, entries = null) {
+                    const sourceEntries = Array.isArray(entries) ? entries : (day?.entries || []);
+                    const taskRanges = sourceEntries
+                        .filter(entry => entry?.type === 'task')
+                        .map(entry => this.getCalendarTaskTimelineRange(entry));
+
+                    const fallbackStart = 6 * 60;
+                    const fallbackEnd = 24 * 60;
+                    if (taskRanges.length === 0) {
+                        return {
+                            dayStart: fallbackStart,
+                            dayEnd: fallbackEnd,
+                            startHour: 6,
+                            endHour: 23
+                        };
+                    }
+
+                    const minTaskStart = Math.min(...taskRanges.map(range => range.startMinutes));
+                    const maxTaskEnd = Math.max(...taskRanges.map(range => range.endMinutes));
+                    const bufferBefore = 75;
+                    const bufferAfter = 90;
+                    const roundStep = 30;
+
+                    let dayStart = Math.floor((Math.max(0, minTaskStart - bufferBefore)) / roundStep) * roundStep;
+                    let dayEnd = Math.ceil((Math.min(24 * 60, maxTaskEnd + bufferAfter)) / roundStep) * roundStep;
+
+                    if (day?.dateKey && this.sanitizeDateKey(day.dateKey) === this.getTodayKey()) {
+                        const now = new Date();
+                        const nowMinutes = (now.getHours() * 60) + now.getMinutes();
+                        dayStart = Math.min(dayStart, Math.floor(Math.max(0, nowMinutes - 60) / roundStep) * roundStep);
+                        dayEnd = Math.max(dayEnd, Math.ceil(Math.min(24 * 60, nowMinutes + 60) / roundStep) * roundStep);
+                    }
+
+                    dayStart = Math.max(0, dayStart);
+                    dayEnd = Math.min(24 * 60, dayEnd);
+
+                    const minWindowMinutes = 4 * 60;
+                    if ((dayEnd - dayStart) < minWindowMinutes) {
+                        const midpoint = (minTaskStart + maxTaskEnd) / 2;
+                        dayStart = Math.floor(Math.max(0, midpoint - (minWindowMinutes / 2)) / roundStep) * roundStep;
+                        dayEnd = Math.min(24 * 60, dayStart + minWindowMinutes);
+                        if ((dayEnd - dayStart) < minWindowMinutes) {
+                            dayStart = Math.max(0, dayEnd - minWindowMinutes);
+                        }
+                    }
+
+                    if (dayEnd <= dayStart) {
+                        dayStart = fallbackStart;
+                        dayEnd = fallbackEnd;
+                    }
+
+                    return {
+                        dayStart,
+                        dayEnd,
+                        startHour: Math.floor(dayStart / 60),
+                        endHour: Math.max(Math.floor((dayEnd - 1) / 60), Math.floor(dayStart / 60))
+                    };
+                },
+
+                getCalendarTimelineGapScale() {
+                    return 0.22;
+                },
+
+                getCalendarTimelineSegments(taskRanges, dayStart, dayEnd) {
+                    const safeStart = Math.max(0, Math.min(24 * 60, Math.round(dayStart)));
+                    const safeEnd = Math.max(safeStart + 60, Math.min(24 * 60, Math.round(dayEnd)));
+                    const focusPaddingMinutes = 26;
+                    const gapScale = this.getCalendarTimelineGapScale();
+
+                    const focusRanges = taskRanges
+                        .map(range => ({
+                            start: Math.max(safeStart, range.startMinutes - focusPaddingMinutes),
+                            end: Math.min(safeEnd, range.endMinutes + focusPaddingMinutes),
+                        }))
+                        .filter(range => range.end > range.start)
+                        .sort((a, b) => a.start - b.start);
+
+                    const mergedFocusRanges = [];
+                    for (const range of focusRanges) {
+                        const previous = mergedFocusRanges[mergedFocusRanges.length - 1];
+                        if (!previous || range.start > previous.end) {
+                            mergedFocusRanges.push({ ...range });
+                        } else {
+                            previous.end = Math.max(previous.end, range.end);
+                        }
+                    }
+
+                    const segments = [];
+                    const appendSegment = (startMinute, endMinute, scale) => {
+                        if (endMinute <= startMinute) return;
+                        const previous = segments[segments.length - 1];
+                        if (previous && previous.scale === scale && Math.abs(previous.endMinute - startMinute) < 0.001) {
+                            previous.endMinute = endMinute;
+                            return;
+                        }
+                        segments.push({
+                            startMinute,
+                            endMinute,
+                            scale,
+                            renderStartMinute: 0,
+                            renderEndMinute: 0,
+                        });
+                    };
+
+                    let cursor = safeStart;
+                    for (const focus of mergedFocusRanges) {
+                        if (focus.start > cursor) {
+                            appendSegment(cursor, focus.start, gapScale);
+                        }
+                        appendSegment(Math.max(cursor, focus.start), focus.end, 1);
+                        cursor = Math.max(cursor, focus.end);
+                    }
+                    if (cursor < safeEnd) {
+                        appendSegment(cursor, safeEnd, gapScale);
+                    }
+                    if (segments.length === 0) {
+                        appendSegment(safeStart, safeEnd, 1);
+                    }
+
+                    let virtualCursor = 0;
+                    for (const segment of segments) {
+                        const duration = Math.max(0, segment.endMinute - segment.startMinute);
+                        const virtualDuration = duration * segment.scale;
+                        segment.renderStartMinute = virtualCursor;
+                        segment.renderEndMinute = virtualCursor + virtualDuration;
+                        virtualCursor = segment.renderEndMinute;
+                    }
+
+                    return {
+                        segments,
+                        virtualSpan: Math.max(60, virtualCursor),
+                        compressionApplied: segments.some(segment => segment.scale < 1),
+                    };
+                },
+
+                mapTimelineRealMinuteToRenderMinute(totalMinutes, metrics) {
+                    const safeMinutes = Math.max(metrics.dayStart, Math.min(metrics.dayEnd, Number(totalMinutes) || metrics.dayStart));
+                    for (let index = 0; index < metrics.timelineSegments.length; index++) {
+                        const segment = metrics.timelineSegments[index];
+                        if (safeMinutes <= segment.endMinute || index === metrics.timelineSegments.length - 1) {
+                            const offsetMinutes = Math.max(0, safeMinutes - segment.startMinute);
+                            return segment.renderStartMinute + (offsetMinutes * segment.scale);
+                        }
+                    }
+                    return metrics.virtualSpan;
+                },
+
+                getCalendarTimelineMetrics(day = null, entries = null) {
+                    if (day?.timelineMetrics) return day.timelineMetrics;
+
+                    const sourceEntries = Array.isArray(entries) ? entries : (day?.entries || []);
+                    const window = this.getCalendarTimelineWindow(day, sourceEntries);
+                    const taskRanges = sourceEntries
+                        .filter(entry => entry?.type === 'task')
+                        .map(entry => this.getCalendarTaskTimelineRange(entry));
+
+                    const segmentsData = this.getCalendarTimelineSegments(taskRanges, window.dayStart, window.dayEnd);
+                    const daySpan = Math.max(60, window.dayEnd - window.dayStart);
+                    const edgePaddingMinutes = Math.max(
+                        8,
+                        Math.floor(this.getCalendarTimelineMinCardMinutes() / 2)
+                    );
+                    const metrics = {
+                        startHour: window.startHour,
+                        endHour: window.endHour,
+                        dayStart: window.dayStart,
+                        dayEnd: window.dayEnd,
+                        daySpan,
+                        edgePaddingMinutes,
+                        renderSpan: segmentsData.virtualSpan + (edgePaddingMinutes * 2),
+                        virtualSpan: segmentsData.virtualSpan,
+                        timelineSegments: segmentsData.segments,
+                        compressionApplied: segmentsData.compressionApplied,
+                    };
+
+                    if (day && typeof day === 'object') {
+                        day.timelineMetrics = metrics;
+                    }
+                    return metrics;
+                },
+
+                getCalendarTimelineHourMarkers(day = null) {
+                    const metrics = this.getCalendarTimelineMetrics(day);
+                    const startHour = Math.floor(metrics.dayStart / 60);
+                    const endHour = Math.ceil(metrics.dayEnd / 60);
+                    const markers = [];
+                    for (let hour = startHour; hour <= endHour; hour++) {
+                        const minuteMark = hour * 60;
+                        if (minuteMark < metrics.dayStart || minuteMark > metrics.dayEnd) continue;
+                        const minuteOffset = metrics.edgePaddingMinutes + this.mapTimelineRealMinuteToRenderMinute(minuteMark, metrics);
+                        markers.push({
+                            hour,
+                            label: `${String(hour).padStart(2, '0')}:00`,
+                            offsetPercent: (minuteOffset / metrics.renderSpan) * 100
+                        });
+                    }
+                    return markers;
+                },
+
+                timeLabelToMinutes(timeValue, fallbackMinutes = 14 * 60) {
+                    const clean = this.sanitizeDueTime(timeValue, '');
+                    if (!clean) return fallbackMinutes;
+                    const [hours, minutes] = clean.split(':').map(Number);
+                    return ((hours || 0) * 60) + (minutes || 0);
+                },
+
+                minutesToTimeLabel(totalMinutes) {
+                    const safe = Math.max(0, Math.min(24 * 60, Math.round(Number(totalMinutes) || 0)));
+                    const hours = Math.floor(safe / 60);
+                    const minutes = safe % 60;
+                    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+                },
+
+                getCalendarTaskTimelineRange(entry) {
+                    const dueTime = this.getCalendarEntryTime(entry);
+                    const dueMinutes = this.timeLabelToMinutes(dueTime, 14 * 60);
+                    const durationMinutes = Math.max(15, this.getTaskEffectiveEstimatedMinutes(entry?.item));
+                    const startMinutes = Math.max(0, dueMinutes - durationMinutes);
+                    const endMinutes = Math.max(startMinutes + 15, dueMinutes);
+                    return {
+                        startMinutes,
+                        endMinutes,
+                        durationMinutes: Math.max(15, endMinutes - startMinutes)
+                    };
+                },
+
+                getCalendarTimelineTaskEntries(entries, day = null) {
+                    const metrics = this.getCalendarTimelineMetrics(day, entries);
+                    const { dayStart, dayEnd, virtualSpan } = metrics;
+
+                    const taskEntries = (entries || [])
+                        .filter(entry => entry?.type === 'task')
+                        .map(entry => {
+                            const range = this.getCalendarTaskTimelineRange(entry);
+                            const clampedStart = Math.max(dayStart, Math.min(dayEnd, range.startMinutes));
+                            const clampedEnd = Math.max(clampedStart + 1, Math.min(dayEnd, range.endMinutes));
+                            const mappedStart = this.mapTimelineRealMinuteToRenderMinute(clampedStart, metrics);
+                            const mappedEnd = this.mapTimelineRealMinuteToRenderMinute(clampedEnd, metrics);
+                            const visualMinutes = Math.max(
+                                this.getCalendarTimelineMinCardMinutes(),
+                                mappedEnd - mappedStart,
+                            );
+                            const renderStart = Math.max(0, Math.min(mappedStart, virtualSpan - visualMinutes));
+                            return {
+                                ...entry,
+                                timelineStartMinutes: range.startMinutes,
+                                timelineEndMinutes: range.endMinutes,
+                                timelineDurationMinutes: range.durationMinutes,
+                                timelineVisualMinutes: visualMinutes,
+                                timelineRenderStartMinutes: renderStart,
+                                timelineRenderEndMinutes: renderStart + visualMinutes,
+                                timelineLane: 0,
+                                timelineLaneCount: 1
+                            };
+                        })
+                        .sort((a, b) => {
+                            const startDiff = a.timelineStartMinutes - b.timelineStartMinutes;
+                            if (startDiff !== 0) return startDiff;
+                            const endDiff = a.timelineEndMinutes - b.timelineEndMinutes;
+                            if (endDiff !== 0) return endDiff;
+                            const dueDiff = this.getCalendarEntrySortScore(a) - this.getCalendarEntrySortScore(b);
+                            if (dueDiff !== 0) return dueDiff;
+                            return (a.item?.name || '').localeCompare((b.item?.name || ''), 'pl');
+                        });
+
+                    if (taskEntries.length === 0) return [];
+
+                    const laneEndMinutes = [];
+                    for (let index = 0; index < taskEntries.length; index++) {
+                        const entry = taskEntries[index];
+                        let lane = laneEndMinutes.findIndex(endMinute => endMinute <= entry.timelineRenderStartMinutes);
+                        if (lane === -1) lane = laneEndMinutes.length;
+                        laneEndMinutes[lane] = entry.timelineRenderEndMinutes;
+                        entry.timelineLane = lane;
+                        entry.timelineIndex = index;
+                    }
+
+                    const overlaps = (first, second) => (
+                        first.timelineRenderStartMinutes < second.timelineRenderEndMinutes &&
+                        second.timelineRenderStartMinutes < first.timelineRenderEndMinutes
+                    );
+
+                    const parent = taskEntries.map((_, index) => index);
+                    const find = (index) => {
+                        if (parent[index] !== index) parent[index] = find(parent[index]);
+                        return parent[index];
+                    };
+                    const union = (first, second) => {
+                        const rootA = find(first);
+                        const rootB = find(second);
+                        if (rootA !== rootB) parent[rootB] = rootA;
+                    };
+
+                    for (let first = 0; first < taskEntries.length; first++) {
+                        for (let second = first + 1; second < taskEntries.length; second++) {
+                            if (taskEntries[second].timelineRenderStartMinutes >= taskEntries[first].timelineRenderEndMinutes) break;
+                            if (overlaps(taskEntries[first], taskEntries[second])) {
+                                union(first, second);
+                            }
+                        }
+                    }
+
+                    const groupLaneCount = new Map();
+                    for (let index = 0; index < taskEntries.length; index++) {
+                        const root = find(index);
+                        const lanes = Math.max(
+                            groupLaneCount.get(root) || 1,
+                            Number(taskEntries[index].timelineLane || 0) + 1
+                        );
+                        groupLaneCount.set(root, lanes);
+                    }
+
+                    return taskEntries.map((entry, index) => ({
+                        ...entry,
+                        timelineLaneCount: groupLaneCount.get(find(index)) || 1
+                    }));
+                },
+
+                getCalendarTimelinePixelsPerMinute() {
+                    return 1.62;
+                },
+
+                getCalendarTimelineMinCardMinutes() {
+                    const minCardHeightPx = 54;
+                    return Math.ceil(minCardHeightPx / this.getCalendarTimelinePixelsPerMinute());
+                },
+
+                getCalendarTimelineVisualMinutes(durationMinutes) {
+                    const safeDuration = Math.max(15, Number(durationMinutes) || 15);
+                    return Math.max(safeDuration, this.getCalendarTimelineMinCardMinutes());
+                },
+
+                getCalendarTimelineTaskDensityClass(entry) {
+                    const visualMinutes = Number(entry?.timelineVisualMinutes || 0);
+                    return visualMinutes <= (this.getCalendarTimelineMinCardMinutes() + 6)
+                        ? 'calendar-timeline-task-compact'
+                        : '';
+                },
+
+                getCalendarTimelineBoardStyle(day) {
+                    const { renderSpan } = this.getCalendarTimelineMetrics(day);
+                    const pixelsPerMinute = this.getCalendarTimelinePixelsPerMinute();
+                    const boardHeight = Math.round(renderSpan * pixelsPerMinute);
+                    return `min-height:${Math.max(520, boardHeight)}px`;
+                },
+
+                getCalendarTimelineEntryStyle(entry, day = null) {
+                    const { virtualSpan, edgePaddingMinutes, renderSpan } = this.getCalendarTimelineMetrics(day);
+                    const visualMinutes = Math.max(1, Number(entry?.timelineVisualMinutes || this.getCalendarTimelineMinCardMinutes()));
+                    const safeVisualMinutes = Math.min(virtualSpan, visualMinutes);
+                    const renderStart = Math.max(
+                        0,
+                        Math.min(virtualSpan - safeVisualMinutes, Number(entry?.timelineRenderStartMinutes ?? 0))
+                    );
+                    const topPercent = ((edgePaddingMinutes + renderStart) / renderSpan) * 100;
+                    const heightPercent = (safeVisualMinutes / renderSpan) * 100;
+                    const laneCount = Math.max(1, Number(entry?.timelineLaneCount || 1));
+                    const lane = Math.max(0, Math.min(laneCount - 1, Number(entry?.timelineLane || 0)));
+                    const laneWidth = 100 / laneCount;
+                    const laneGapPercent = Math.min(0.8, laneWidth * 0.14);
+                    const leftPercent = (lane * laneWidth) + (laneGapPercent / 2);
+                    const widthPercent = Math.max(1.2, laneWidth - laneGapPercent);
+                    return `top:${topPercent.toFixed(3)}%;height:${heightPercent.toFixed(3)}%;left:${leftPercent.toFixed(3)}%;width:${widthPercent.toFixed(3)}%`;
+                },
+
+                getCalendarTimelineTimeRangeLabel(entry) {
+                    const startLabel = this.minutesToTimeLabel(entry?.timelineStartMinutes || 0);
+                    const endLabel = this.minutesToTimeLabel(entry?.timelineEndMinutes || 0);
+                    return `${startLabel} - ${endLabel}`;
+                },
+
+                getCalendarTimelineNowStyle(day = null) {
+                    if (!day?.dateKey || this.sanitizeDateKey(day.dateKey) !== this.getTodayKey()) return '';
+                    const metrics = this.getCalendarTimelineMetrics(day);
+                    const now = new Date();
+                    const nowMinutes = (now.getHours() * 60) + now.getMinutes();
+                    const clamped = Math.max(metrics.dayStart, Math.min(metrics.dayEnd, nowMinutes));
+                    const mapped = this.mapTimelineRealMinuteToRenderMinute(clamped, metrics);
+                    const topPercent = ((metrics.edgePaddingMinutes + mapped) / metrics.renderSpan) * 100;
+                    return `top:${topPercent.toFixed(3)}%`;
                 },
 
                 getCalendarEntryTime(entry) {
@@ -2160,7 +2597,12 @@
                             title: subtask.title,
                             done: !!subtask.done,
                             estimated_time: this.normalizeSubtaskEstimatedMinutes(subtask.estimated_time),
-                            points_weight: this.normalizeSubtaskPointsWeight(subtask.points_weight)
+                            points_weight: this.normalizeSubtaskPointsWeight(subtask.points_weight),
+                            done_at: subtask.done_at || '',
+                            source_task_id: this.normalizeOptionalId(subtask.source_task_id),
+                            source_module_id: this.normalizeOptionalId(subtask.source_module_id),
+                            source_due_date: this.sanitizeDateKey(subtask.source_due_date),
+                            source_due_time: this.sanitizeDueTime(subtask.source_due_time, '')
                         }))
                     };
                 },
@@ -2185,7 +2627,12 @@
                                 title: subtask.title,
                                 done: true,
                                 estimated_time: this.normalizeSubtaskEstimatedMinutes(subtask.estimated_time),
-                                points_weight: this.normalizeSubtaskPointsWeight(subtask.points_weight)
+                                points_weight: this.normalizeSubtaskPointsWeight(subtask.points_weight),
+                                done_at: subtask.done_at || '',
+                                source_task_id: this.normalizeOptionalId(subtask.source_task_id),
+                                source_module_id: this.normalizeOptionalId(subtask.source_module_id),
+                                source_due_date: this.sanitizeDateKey(subtask.source_due_date),
+                                source_due_time: this.sanitizeDueTime(subtask.source_due_time, '')
                             }));
                         }
                     }
@@ -2197,6 +2644,7 @@
                     this.activeModule = module;
                     this.setTaskScope('module');
                     this.view = 'kanban';
+                    this.closeMobileModules();
                 },
 
                 goToTask(task) {
@@ -2207,6 +2655,7 @@
                         this.setTaskScope('module');
                     }
                     this.view = 'kanban';
+                    this.closeMobileModules();
                     this.openTaskModal(task);
                 },
 
@@ -2261,6 +2710,7 @@
                 startTaskDrag(task, event) {
                     if (!task) return;
                     this.draggedTaskId = task.id;
+                    this.draggedTaskTargetId = null;
                     if (event?.dataTransfer) {
                         event.dataTransfer.effectAllowed = 'move';
                         event.dataTransfer.setData('text/plain', String(task.id));
@@ -2269,6 +2719,142 @@
 
                 endTaskDrag() {
                     this.draggedTaskId = null;
+                    this.draggedTaskTargetId = null;
+                },
+
+                canDropTaskOnTask(task) {
+                    return !!(this.draggedTaskId && task && Number(this.draggedTaskId) !== Number(task.id));
+                },
+
+                dragTaskOverTask(task, event) {
+                    if (!this.canDropTaskOnTask(task)) return;
+                    this.draggedTaskTargetId = task.id;
+                    if (event?.dataTransfer) {
+                        event.dataTransfer.dropEffect = 'move';
+                    }
+                },
+
+                clearTaskMergeTarget(task) {
+                    if (!task || Number(this.draggedTaskTargetId) === Number(task.id)) {
+                        this.draggedTaskTargetId = null;
+                    }
+                },
+
+                getTaskBundleCount(task) {
+                    return this.normalizeSubtasks(task?.subtasks).length;
+                },
+
+                getTaskBundleLabel(task) {
+                    const count = this.getTaskBundleCount(task);
+                    if (!count) return '';
+                    return `${count} podz.`;
+                },
+
+                getSubtaskSourceLabel(subtask) {
+                    const pieces = [];
+                    const moduleName = subtask?.source_module_id ? this.getModuleName(subtask.source_module_id) : '';
+                    if (moduleName) pieces.push(moduleName);
+                    const dueDate = this.sanitizeDateKey(subtask?.source_due_date);
+                    if (dueDate) {
+                        const dueTime = this.sanitizeDueTime(subtask?.source_due_time, '');
+                        pieces.push(dueTime ? `${dueDate} ${dueTime}` : dueDate);
+                    }
+                    return pieces.join(' • ');
+                },
+
+                getMergeDefaultName(sourceTask, targetTask) {
+                    const targetName = (targetTask?.name || '').trim();
+                    const sourceName = (sourceTask?.name || '').trim();
+                    const moduleName = this.getModuleName(targetTask?.module_id);
+                    const joined = `${targetName} ${sourceName}`.toLowerCase();
+                    const looksLikeFixes = ['popraw', 'napraw', 'fix', 'bug', 'blad', 'korekt'].some(keyword => joined.includes(keyword));
+                    if (Number(sourceTask?.module_id) === Number(targetTask?.module_id) && moduleName && looksLikeFixes) {
+                        return `Poprawki: ${moduleName}`;
+                    }
+                    if (Number(sourceTask?.module_id) === Number(targetTask?.module_id) && moduleName) {
+                        return `${moduleName}: pakiet zadan`;
+                    }
+                    return `Pakiet: ${targetName || sourceName || 'zadania'}`;
+                },
+
+                getTaskMergePrompt(sourceTask, targetTask) {
+                    const targetHasSubtasks = this.getTaskBundleCount(targetTask) > 0;
+                    if (targetHasSubtasks) {
+                        return `Dodac "${sourceTask?.name || 'zadanie'}" jako podzadanie do "${targetTask?.name || 'pakietu'}"?`;
+                    }
+                    return 'Nazwa nowego zadania zbiorczego:';
+                },
+
+                async mergeTasks(sourceTask, targetTask, name = '', allowOverflow = false) {
+                    const response = await fetch(`${this.API}/tasks/merge`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            source_task_id: sourceTask.id,
+                            target_task_id: targetTask.id,
+                            name,
+                            allow_time_overflow: !!allowOverflow
+                        })
+                    });
+
+                    if (response.status === 409) {
+                        let detail = null;
+                        try {
+                            const payloadError = await response.json();
+                            detail = payloadError?.detail || null;
+                        } catch (error) {
+                            detail = null;
+                        }
+                        const warningMessage = typeof detail === 'object' && detail?.message
+                            ? detail.message
+                            : 'Polaczone zadanie przekroczy limit 8h w kalendarzu.';
+                        const acceptOverflow = confirm(`${warningMessage}\n\nKliknij OK, aby polaczyc mimo to.`);
+                        if (!acceptOverflow) return false;
+                        return this.mergeTasks(sourceTask, targetTask, name, true);
+                    }
+
+                    if (!response.ok) {
+                        alert(await this.getApiErrorMessage(response, 'Nie udalo sie polaczyc zadan.'));
+                        return false;
+                    }
+
+                    const payload = await response.json();
+                    await this.init();
+                    const mergedTask = this.getTaskById(payload?.id);
+                    if (mergedTask) {
+                        const module = this.modules.find(item => Number(item.id) === Number(mergedTask.module_id));
+                        if (module) this.activeModule = module;
+                    }
+                    return true;
+                },
+
+                async dropTaskOnTask(targetTask, event = null) {
+                    if (event?.stopPropagation) event.stopPropagation();
+                    const sourceTaskId = Number(this.draggedTaskId);
+                    this.draggedTaskId = null;
+                    this.draggedTaskTargetId = null;
+                    if (!sourceTaskId || !targetTask || sourceTaskId === Number(targetTask.id)) return;
+
+                    const sourceTask = this.getTaskById(sourceTaskId);
+                    if (!sourceTask) return;
+
+                    const targetHasSubtasks = this.getTaskBundleCount(targetTask) > 0;
+                    let mergeName = '';
+                    if (targetHasSubtasks) {
+                        if (!confirm(this.getTaskMergePrompt(sourceTask, targetTask))) return;
+                        mergeName = targetTask.name || '';
+                    } else {
+                        const defaultName = this.getMergeDefaultName(sourceTask, targetTask);
+                        const pickedName = prompt(this.getTaskMergePrompt(sourceTask, targetTask), defaultName);
+                        if (pickedName === null) return;
+                        mergeName = pickedName.trim();
+                        if (!mergeName) {
+                            alert('Nazwa zadania zbiorczego nie moze byc pusta.');
+                            return;
+                        }
+                    }
+
+                    await this.mergeTasks(sourceTask, targetTask, mergeName);
                 },
 
                 async dropTaskToColumn(status) {
@@ -3579,17 +4165,28 @@
                     this.isShredding = true;
                     try {
                         const res = await fetch(`${this.API}/tasks/${this.editingTask.id}/shred`, { method: 'POST' });
-                        const data = await res.json();
-                        if (data.error) {
-                            alert(`Blad AI: ${data.error}`);
-                        } else {
-                            this.taskModal = false;
-                            await this.init();
+                        let data = {};
+                        try {
+                            data = await res.json();
+                        } catch (parseError) {
+                            data = {};
                         }
+
+                        if (!res.ok || data.error) {
+                            const serverMessage = typeof data?.detail === 'string'
+                                ? data.detail
+                                : (typeof data?.error === 'string' ? data.error : '');
+                            alert(serverMessage || 'Nie udalo sie rozbic zadania przez AI.');
+                            return;
+                        }
+
+                        this.taskModal = false;
+                        await this.init();
                     } catch (error) {
                         alert('Blad polaczenia z Ollama.');
+                    } finally {
+                        this.isShredding = false;
                     }
-                    this.isShredding = false;
                 },
 
                 formatTime(seconds) {
@@ -3656,6 +4253,12 @@
 
                 async openCalendarView() {
                     this.view = 'calendar';
+                    this.closeMobileModules();
+                    if (this.isMobileLayout) {
+                        this.calendarMobileSection = 'preview';
+                        this.calendarCursor = this.getTodayKey();
+                        this.selectedDate = this.getTodayKey();
+                    }
                     if (!this.calendarCursor) this.calendarCursor = this.getTodayKey();
                     if (!this.selectedDate) this.selectedDate = this.calendarCursor;
                     await this.syncCalendarMonthData();

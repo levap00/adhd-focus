@@ -3,6 +3,7 @@ import hashlib
 import hmac
 import os
 import secrets
+from contextvars import ContextVar, Token
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -10,17 +11,19 @@ from dotenv import load_dotenv
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
+from backend.accounts import ACCOUNTS, ACCOUNTS_BY_USERNAME
+
 load_dotenv()
 
-USERNAME = os.getenv("FOCUS_USERNAME", "admin")
-PASSWORD = os.getenv("FOCUS_PASSWORD", "admin")
 SESSION_COOKIE_NAME = os.getenv("FOCUS_SESSION_COOKIE_NAME", "focus_session")
 SESSION_COOKIE_SECURE_MODE = (os.getenv("FOCUS_COOKIE_SECURE", "auto") or "auto").strip().lower()
 SESSION_TTL_SECONDS = max(300, int(os.getenv("FOCUS_SESSION_TTL_SECONDS", "43200")))
 SESSION_REMEMBER_TTL_SECONDS = max(300, int(os.getenv("FOCUS_SESSION_REMEMBER_TTL_SECONDS", "2592000")))
-SESSION_SECRET = os.getenv("FOCUS_SESSION_SECRET", f"{USERNAME}:{PASSWORD}:focus-session-secret")
+_SESSION_SEED = "|".join(f"{account.username}:{account.password}" for account in ACCOUNTS)
+SESSION_SECRET = os.getenv("FOCUS_SESSION_SECRET", f"{_SESSION_SEED}:focus-session-secret")
 
 security = HTTPBasic(auto_error=False)
+_current_request_user: ContextVar[Optional[str]] = ContextVar("current_request_user", default=None)
 
 
 def _is_request_https(request: Request) -> bool:
@@ -39,7 +42,29 @@ def should_set_secure_cookie(request: Request) -> bool:
 
 
 def authenticate_credentials(username: str, password: str) -> bool:
-    return secrets.compare_digest(username or "", USERNAME) and secrets.compare_digest(password or "", PASSWORD)
+    return resolve_authenticated_username(username, password) is not None
+
+
+def resolve_authenticated_username(username: str, password: str) -> Optional[str]:
+    username = username or ""
+    password = password or ""
+    for account in ACCOUNTS:
+        if secrets.compare_digest(username, account.username) and secrets.compare_digest(password, account.password):
+            return account.username
+    return None
+
+
+def set_request_user(username: Optional[str]) -> Token:
+    normalized = (username or "").strip() or None
+    return _current_request_user.set(normalized)
+
+
+def reset_request_user(token: Token) -> None:
+    _current_request_user.reset(token)
+
+
+def get_request_user() -> Optional[str]:
+    return _current_request_user.get()
 
 
 def _sign_payload(payload: str) -> str:
@@ -80,7 +105,7 @@ def decode_session_token(token: str) -> Optional[str]:
     if not secrets.compare_digest(signature, _sign_payload(payload)):
         return None
 
-    if not secrets.compare_digest(username, USERNAME):
+    if username not in ACCOUNTS_BY_USERNAME:
         return None
 
     return username
@@ -91,16 +116,20 @@ def get_session_user(request: Request) -> Optional[str]:
     return decode_session_token(token)
 
 
-def verify_credentials(
+async def verify_credentials(
     request: Request,
     credentials: Optional[HTTPBasicCredentials] = Depends(security),
 ) -> str:
     session_user = get_session_user(request)
     if session_user:
+        set_request_user(session_user)
         return session_user
 
-    if credentials and authenticate_credentials(credentials.username, credentials.password):
-        return credentials.username
+    if credentials:
+        basic_user = resolve_authenticated_username(credentials.username, credentials.password)
+        if basic_user:
+            set_request_user(basic_user)
+            return basic_user
 
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,

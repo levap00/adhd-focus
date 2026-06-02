@@ -4,7 +4,7 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 
-from backend.auth import verify_credentials
+from backend.auth import get_session_user, reset_request_user, set_request_user, verify_credentials
 from backend.db import init_db
 from backend.routers import auth_session, debts, medications, modules, monthly_tasks, notes, rewards, static_files, tasks
 from backend.telegram import register_telegram_scheduler
@@ -36,6 +36,14 @@ def create_app() -> FastAPI:
                 secure_url = request.url.replace(scheme="https")
                 return RedirectResponse(url=str(secure_url), status_code=307)
             return await call_next(request)
+
+    @app.middleware("http")
+    async def bind_request_user(request: Request, call_next):
+        token = set_request_user(get_session_user(request))
+        try:
+            return await call_next(request)
+        finally:
+            reset_request_user(token)
 
     @app.middleware("http")
     async def add_security_headers(request: Request, call_next):
