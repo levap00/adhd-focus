@@ -1,0 +1,395 @@
+<!doctype html>
+<html lang="pl">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+    <meta name="color-scheme" content="dark">
+    <title>Focus Progress Widget</title>
+    <style>
+        :root {
+            --bg: #0f172a;
+            --panel: #111827;
+            --panel-soft: #1f2937;
+            --line: rgba(148, 163, 184, 0.18);
+            --text: #f8fafc;
+            --muted: #94a3b8;
+            --green: #22c55e;
+            --cyan: #22d3ee;
+            --amber: #f59e0b;
+            --red: #fb7185;
+            --track: rgba(148, 163, 184, 0.2);
+        }
+
+        * {
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        html,
+        body {
+            margin: 0;
+            width: 100%;
+            min-width: 0;
+            min-height: 100%;
+            overflow: hidden;
+            background: var(--bg);
+            color: var(--text);
+            font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            touch-action: manipulation;
+            -webkit-text-size-adjust: 100%;
+        }
+
+        body {
+            display: flex;
+            min-height: 100dvh;
+            padding: max(8px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left));
+        }
+
+        .widget {
+            display: grid;
+            width: 100%;
+            min-height: 120px;
+            grid-template-columns: minmax(96px, 0.82fr) minmax(0, 1.18fr);
+            gap: 8px;
+        }
+
+        .panel {
+            min-width: 0;
+            border: 1px solid var(--line);
+            border-radius: 10px;
+            background: linear-gradient(180deg, rgba(31, 41, 55, 0.96), rgba(15, 23, 42, 0.98));
+            overflow: hidden;
+        }
+
+        .summary {
+            display: grid;
+            place-items: center;
+            padding: 10px 8px;
+            text-align: center;
+        }
+
+        .label {
+            max-width: 100%;
+            overflow: hidden;
+            color: var(--muted);
+            font-size: 10px;
+            font-weight: 900;
+            letter-spacing: 0.08em;
+            line-height: 1;
+            text-transform: uppercase;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .ring {
+            --angle: 0deg;
+            --accent: var(--green);
+            position: relative;
+            display: grid;
+            width: min(74px, 34vw);
+            aspect-ratio: 1;
+            place-items: center;
+            border-radius: 50%;
+            background: conic-gradient(var(--accent) var(--angle), var(--track) 0);
+            box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+        }
+
+        .ring::after {
+            position: absolute;
+            inset: 8px;
+            border-radius: 50%;
+            background: var(--panel);
+            content: "";
+        }
+
+        .ring-value {
+            position: relative;
+            z-index: 1;
+            font-size: 18px;
+            font-weight: 950;
+            line-height: 1;
+        }
+
+        .ring-value small {
+            font-size: 9px;
+            font-weight: 900;
+        }
+
+        .summary .ring {
+            width: min(88px, 42vw);
+            margin: 7px 0;
+        }
+
+        .summary .ring::after {
+            inset: 9px;
+        }
+
+        .summary .ring-value {
+            font-size: 23px;
+        }
+
+        .stats {
+            display: grid;
+            width: 100%;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 4px;
+        }
+
+        .stat {
+            min-width: 0;
+            border-radius: 7px;
+            background: rgba(255, 255, 255, 0.04);
+            padding: 5px 3px;
+        }
+
+        .stat strong {
+            display: block;
+            overflow: hidden;
+            font-size: 13px;
+            font-weight: 950;
+            line-height: 1;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .stat span {
+            display: block;
+            margin-top: 3px;
+            overflow: hidden;
+            color: var(--muted);
+            font-size: 8px;
+            font-weight: 850;
+            line-height: 1;
+            text-overflow: ellipsis;
+            text-transform: uppercase;
+            white-space: nowrap;
+        }
+
+        .modules {
+            display: grid;
+            min-height: 0;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 6px;
+            padding: 7px;
+        }
+
+        .module {
+            display: grid;
+            min-width: 0;
+            grid-template-columns: auto minmax(0, 1fr);
+            align-items: center;
+            gap: 7px;
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.035);
+            padding: 6px;
+        }
+
+        .module .ring {
+            width: 42px;
+            flex: 0 0 auto;
+        }
+
+        .module .ring::after {
+            inset: 5px;
+        }
+
+        .module .ring-value {
+            font-size: 11px;
+        }
+
+        .module-name {
+            min-width: 0;
+            overflow: hidden;
+            font-size: 10px;
+            font-weight: 900;
+            line-height: 1.15;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .module-meta {
+            margin-top: 4px;
+            overflow: hidden;
+            color: var(--muted);
+            font-size: 8px;
+            font-weight: 800;
+            line-height: 1;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .message {
+            position: fixed;
+            inset: 0;
+            display: grid;
+            place-items: center;
+            padding: 16px;
+            background: var(--bg);
+            color: var(--text);
+            font-size: 13px;
+            font-weight: 800;
+            text-align: center;
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        @media (max-width: 260px) {
+            body {
+                padding: 6px;
+            }
+
+            .widget {
+                grid-template-columns: 1fr;
+            }
+
+            .modules {
+                display: none;
+            }
+        }
+    </style>
+</head>
+<body>
+    <main id="widget" class="widget" aria-live="polite">
+        <section class="panel summary" aria-label="Postep zadan">
+            <div class="label">Postep</div>
+            <div id="overall-ring" class="ring">
+                <span class="ring-value"><span id="overall-value">0</span><small>%</small></span>
+            </div>
+            <div class="stats">
+                <div class="stat">
+                    <strong id="today-open">0</strong>
+                    <span>Dzis</span>
+                </div>
+                <div class="stat">
+                    <strong id="overdue-open">0</strong>
+                    <span>Po term.</span>
+                </div>
+                <div class="stat">
+                    <strong id="done-today">0</strong>
+                    <span>Zrob.</span>
+                </div>
+            </div>
+        </section>
+
+        <section class="panel modules" id="modules" aria-label="Postep modulow"></section>
+    </main>
+
+    <div id="message" class="message hidden"></div>
+
+    <script>
+        (() => {
+            const params = new URLSearchParams(window.location.search);
+            const token = (params.get("token") || "").trim();
+            const limit = Math.max(1, Math.min(12, Number(params.get("limit") || 6)));
+            const widget = document.getElementById("widget");
+            const message = document.getElementById("message");
+            const modules = document.getElementById("modules");
+            const overallRing = document.getElementById("overall-ring");
+            const overallValue = document.getElementById("overall-value");
+            const todayOpen = document.getElementById("today-open");
+            const overdueOpen = document.getElementById("overdue-open");
+            const doneToday = document.getElementById("done-today");
+
+            function showMessage(text) {
+                widget.classList.add("hidden");
+                message.textContent = text;
+                message.classList.remove("hidden");
+            }
+
+            function setRing(el, percent, accent = "var(--green)") {
+                const safePercent = Math.max(0, Math.min(100, Number(percent || 0)));
+                el.style.setProperty("--angle", `${safePercent * 3.6}deg`);
+                el.style.setProperty("--accent", accent);
+            }
+
+            function formatPercent(value) {
+                const rounded = Math.round(Number(value || 0));
+                return String(Math.max(0, Math.min(100, rounded)));
+            }
+
+            function accentFor(percent, open) {
+                if (Number(open || 0) <= 0) return "var(--green)";
+                if (Number(percent || 0) >= 70) return "var(--cyan)";
+                if (Number(percent || 0) >= 35) return "var(--amber)";
+                return "var(--red)";
+            }
+
+            function moduleNode(module) {
+                const item = document.createElement("article");
+                item.className = "module";
+
+                const ring = document.createElement("div");
+                ring.className = "ring";
+                const value = document.createElement("span");
+                value.className = "ring-value";
+                value.textContent = formatPercent(module.percent);
+                ring.appendChild(value);
+                setRing(ring, module.percent, accentFor(module.percent, module.open));
+
+                const copy = document.createElement("div");
+                copy.className = "module-copy";
+                const name = document.createElement("div");
+                name.className = "module-name";
+                name.textContent = (module.name || "Bez modulu").trim();
+                const meta = document.createElement("div");
+                meta.className = "module-meta";
+                meta.textContent = `${Number(module.done || 0)}/${Number(module.total || 0)} zadan`;
+                copy.append(name, meta);
+
+                item.append(ring, copy);
+                return item;
+            }
+
+            async function loadWidget() {
+                const query = new URLSearchParams({ limit: String(limit) });
+                if (token) query.set("token", token);
+
+                try {
+                    const response = await fetch(`/tasks/widget/progress?${query.toString()}`, {
+                        cache: "no-store",
+                        credentials: token ? "omit" : "same-origin",
+                        headers: { "Accept": "application/json" },
+                    });
+
+                    if (!response.ok) {
+                        showMessage(response.status === 401 ? "Brak dostepu" : "Blad pobierania");
+                        return;
+                    }
+
+                    const data = await response.json();
+                    const counts = data.counts || {};
+                    const percent = Number(counts.percent || 0);
+                    overallValue.textContent = formatPercent(percent);
+                    setRing(overallRing, percent, accentFor(percent, counts.open));
+                    todayOpen.textContent = String(Number(counts.today_open || 0));
+                    overdueOpen.textContent = String(Number(counts.overdue_open || 0));
+                    doneToday.textContent = String(Number(counts.done_today || 0));
+
+                    modules.replaceChildren();
+                    const moduleItems = Array.isArray(data.modules) ? data.modules : [];
+                    if (!moduleItems.length) {
+                        showMessage("Brak zadan");
+                        return;
+                    }
+                    for (const module of moduleItems) {
+                        modules.appendChild(moduleNode(module));
+                    }
+
+                    message.classList.add("hidden");
+                    widget.classList.remove("hidden");
+                } catch (error) {
+                    showMessage("Blad pobierania");
+                }
+            }
+
+            loadWidget();
+            window.addEventListener("focus", loadWidget);
+            document.addEventListener("visibilitychange", () => {
+                if (!document.hidden) loadWidget();
+            });
+        })();
+    </script>
+</body>
+</html>

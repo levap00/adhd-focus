@@ -7,8 +7,9 @@ from fastapi.responses import RedirectResponse
 from backend.auth import get_session_user, reset_request_user, set_request_user, verify_credentials
 from backend.db import init_db
 from backend.rate_limit import install_rate_limiter
-from backend.routers import auth_session, debts, medications, modules, monthly_tasks, notes, rewards, static_files, tasks
+from backend.routers import auth_session, debts, medications, modules, monthly_tasks, notes, notifications, rewards, static_files, tasks
 from backend.telegram import register_telegram_scheduler
+from backend.web_push import register_web_push_scheduler
 
 
 def _is_https_request(request: Request) -> bool:
@@ -67,9 +68,11 @@ def create_app() -> FastAPI:
     app.include_router(monthly_tasks.router, dependencies=protected)
     app.include_router(medications.router, dependencies=protected)
     app.include_router(debts.router, dependencies=protected)
+    app.include_router(notifications.router, dependencies=protected)
 
     init_db()
     register_telegram_scheduler(app)
+    register_web_push_scheduler(app)
     return app
 
 

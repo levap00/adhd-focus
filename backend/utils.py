@@ -49,7 +49,7 @@ def normalize_due_date(raw: Optional[str]) -> str:
     return ""
 
 
-def normalize_due_time(raw: Optional[str], default: str = "14:00") -> str:
+def normalize_due_time(raw: Optional[str], default: str = "23:59") -> str:
     fallback = (default or "").strip()
     value = (raw or "").strip() or fallback
     if not value:

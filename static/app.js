@@ -6,6 +6,31 @@
                 activeModule: null,
                 calmMode: false,
                 theme: 'light',
+                settingsMenuOpen: false,
+                notificationSettings: {
+                    enabled: true,
+                    opening_enabled: true,
+                    opening_time: '08:00',
+                    day_summary_enabled: true,
+                    day_summary_time: '20:30',
+                    medication_enabled: true,
+                    medication_repeat_minutes: 5,
+                    task_reminder_enabled: true,
+                    task_reminder_repeat_minutes: 120,
+                    timezone: 'Europe/Warsaw'
+                },
+                pushState: {
+                    supported: false,
+                    serviceWorkerReady: false,
+                    permission: typeof Notification === 'undefined' ? 'unsupported' : Notification.permission,
+                    subscribed: false,
+                    subscriptionCount: 0,
+                    vapidConfigured: false,
+                    publicKey: '',
+                    message: ''
+                },
+                zoomGuardsInstalled: false,
+                fabOpen: false,
                 sidebarCollapsed: false,
                 focusFilter: 'all',
                 dopamineWeekOffset: 0,
@@ -23,6 +48,9 @@
                 flowTimer: 0,
                 timerInterval: null,
                 isShredding: false,
+                brainDumpNotes: [],
+                activeBrainDumpNoteId: null,
+                brainDumpNoteTitle: '',
                 brainDump: '',
                 brainDumpTargetModuleId: '',
                 noteSavedAt: '',
@@ -46,8 +74,10 @@
                 },
                 newMonthlyTaskName: '',
                 newMonthlyTaskDueDay: '',
+                newMonthlyTaskDueTime: '23:59',
                 newMonthlyTaskRepeatType: 'monthly',
                 newMonthlyTaskRepeatWeekday: 1,
+                editingMonthlyTaskId: null,
                 monthlyTaskModal: false,
                 debts: [],
                 debtsMonthKey: '',
@@ -175,9 +205,58 @@
                     }
                 },
 
+                installZoomGuards() {
+                    if (this.zoomGuardsInstalled || typeof document === 'undefined') return;
+                    this.zoomGuardsInstalled = true;
+
+                    document.addEventListener('gesturestart', event => {
+                        event.preventDefault();
+                    }, { passive: false });
+
+                    let lastTouchEnd = 0;
+                    document.addEventListener('touchend', event => {
+                        const now = Date.now();
+                        if (now - lastTouchEnd <= 300) {
+                            event.preventDefault();
+                        }
+                        lastTouchEnd = now;
+                    }, { passive: false });
+                },
+
+                applyRouteFromUrl() {
+                    if (typeof window === 'undefined') return;
+                    const params = new URLSearchParams(window.location.search || '');
+                    if (!params.toString()) return;
+
+                    let consumed = false;
+                    const requestedView = (params.get('view') || '').trim().toLowerCase();
+                    const medicationDate = this.sanitizeDateKey(params.get('med_date') || params.get('medication_date') || '');
+
+                    if (requestedView === 'meds' || medicationDate) {
+                        this.view = 'meds';
+                        if (medicationDate) {
+                            this.medicationsDate = medicationDate;
+                        }
+                        consumed = true;
+                    } else if (['dash', 'kanban', 'global', 'calendar', 'brain', 'canvas', 'docs', 'monthly', 'debts', 'notifications'].includes(requestedView)) {
+                        this.view = requestedView;
+                        consumed = true;
+                    }
+
+                    if (!consumed || !window.history?.replaceState) return;
+                    params.delete('view');
+                    params.delete('med_date');
+                    params.delete('medication_date');
+                    const cleanQuery = params.toString();
+                    const nextUrl = `${window.location.pathname}${cleanQuery ? `?${cleanQuery}` : ''}${window.location.hash || ''}`;
+                    window.history.replaceState({}, '', nextUrl);
+                },
+
                 async init() {
                     this.loadUIPreferences();
+                    this.installZoomGuards();
                     this.handleViewportResize();
+                    this.registerServiceWorker();
                     if (!this.isMobileLayout) {
                         this.mobileModulesOpen = true;
                     }
@@ -189,6 +268,7 @@
                     if (!this.selectedDate) this.selectedDate = this.getTodayKey();
                     if (!this.monthlyMonthKey) this.monthlyMonthKey = this.getCurrentMonthKey();
                     if (!this.medicationsDate) this.medicationsDate = this.getTodayKey();
+                    this.applyRouteFromUrl();
 
                     await Promise.all([
                         this.loadModules(),
@@ -196,6 +276,7 @@
                         this.loadRewardSummary(),
                         this.loadMedications(),
                         this.loadBrainDump(),
+                        this.loadNotificationSettings(),
                         this.loadCanvasBoard(),
                         this.loadProjectDoc(),
                         this.loadMonthlyTasks(),
@@ -256,6 +337,68 @@
                 toggleTheme() {
                     this.theme = this.theme === 'dark' ? 'light' : 'dark';
                     this.saveUIPreferences();
+                },
+
+                closeOverlayMenus() {
+                    this.settingsMenuOpen = false;
+                    this.fabOpen = false;
+                },
+
+                toggleFab() {
+                    this.settingsMenuOpen = false;
+                    this.fabOpen = !this.fabOpen;
+                },
+
+                closeFab() {
+                    this.fabOpen = false;
+                },
+
+                navigateMainView(target) {
+                    this.closeOverlayMenus();
+                    if (target === 'dash') {
+                        this.view = 'dash';
+                        this.closeMobileModules();
+                        return;
+                    }
+                    if (target === 'kanban') {
+                        this.openAllTasksView();
+                        return;
+                    }
+                    if (target === 'global') {
+                        this.view = 'global';
+                        this.closeMobileModules();
+                        return;
+                    }
+                    if (target === 'calendar') {
+                        this.openCalendarView();
+                    }
+                },
+
+                navigateUtilityView(target) {
+                    this.closeOverlayMenus();
+                    this.closeMobileModules();
+                    if (target === 'brain') {
+                        this.view = 'brain';
+                        return;
+                    }
+                    const allowedViews = ['canvas', 'docs', 'monthly', 'meds', 'debts', 'notifications'];
+                    if (allowedViews.includes(target)) {
+                        this.view = target;
+                    }
+                },
+
+                openFabNewTask() {
+                    this.closeFab();
+                    this.openNewTaskModal(this.activeModule ? this.activeModule.id : null);
+                },
+
+                openBrainDumpAction() {
+                    this.closeOverlayMenus();
+                    this.view = 'brain';
+                    this.closeMobileModules();
+                    window.setTimeout(() => {
+                        document.querySelector('[data-brain-dump-input]')?.focus();
+                    }, 0);
                 },
 
                 toggleSidebar() {
@@ -558,7 +701,7 @@
                         priority: this.normalizePriorityValue(task.priority),
                         estimated_time: this.normalizeEstimatedMinutes(task.estimated_time),
                         points_weight: this.normalizePointsWeight(task.points_weight),
-                        due_time: this.sanitizeDueTime(task.due_time, task.due_date ? '14:00' : ''),
+                        due_time: this.sanitizeDueTime(task.due_time, task.due_date ? '23:59' : ''),
                         is_shared: !!task.is_shared,
                         shared_role: (task.shared_role || 'owner').toString(),
                         share_count: Number(task.share_count || 0),
@@ -567,31 +710,52 @@
                     }));
                 },
 
+                normalizeBrainDumpNote(note) {
+                    return {
+                        id: Number(note?.id) || 0,
+                        title: (note?.title || 'Nowa notatka').toString(),
+                        content: (note?.content || '').toString(),
+                        created_at: (note?.created_at || '').toString(),
+                        updated_at: (note?.updated_at || '').toString()
+                    };
+                },
+
                 async loadBrainDump() {
                     try {
-                        const res = await fetch(`${this.API}/notes/brain-dump`);
-                        if (!res.ok) throw new Error('note_load_failed');
-                        const data = await res.json();
-                        this.brainDump = data.content || '';
-                        this.noteSavedAt = data.updated_at || '';
-                        try {
-                            const localDraft = localStorage.getItem(this.brainDumpStorageKey);
-                            if (typeof localDraft === 'string' && localDraft.trim() && localDraft !== this.brainDump) {
-                                this.brainDump = localDraft;
-                            } else {
-                                localStorage.removeItem(this.brainDumpStorageKey);
+                        const res = await fetch(`${this.API}/brain-dump-notes`);
+                        if (!res.ok) throw new Error('brain_dump_load_failed');
+                        const payload = await res.json();
+                        this.brainDumpNotes = Array.isArray(payload.items)
+                            ? payload.items.map(note => this.normalizeBrainDumpNote(note)).filter(note => note.id > 0)
+                            : [];
+
+                        if (this.brainDumpNotes.length === 0) {
+                            try {
+                                const localDraft = localStorage.getItem(this.brainDumpStorageKey);
+                                if (typeof localDraft === 'string' && localDraft.trim()) {
+                                    const created = await this.createBrainDumpNote(localDraft, 'Szkic lokalny', false);
+                                    if (created) return;
+                                }
+                            } catch (error) {
+                                /* ignore local draft migration errors */
                             }
+                        }
+
+                        const preferred = this.brainDumpNotes.find(note => note.id === Number(this.activeBrainDumpNoteId)) || this.brainDumpNotes[0] || null;
+                        this.applyActiveBrainDumpNote(preferred);
+                        try {
+                            localStorage.removeItem(this.brainDumpStorageKey);
                         } catch (error) {
                             /* ignore storage cleanup errors */
                         }
                     } catch (error) {
                         try {
                             const localDraft = localStorage.getItem(this.brainDumpStorageKey);
-                            if (typeof localDraft === 'string') {
-                                this.brainDump = localDraft;
-                            }
+                            this.brainDump = typeof localDraft === 'string' ? localDraft : '';
+                            this.brainDumpNoteTitle = 'Szkic lokalny';
                         } catch (readError) {
-                            /* ignore storage read errors */
+                            this.brainDump = '';
+                            this.brainDumpNoteTitle = '';
                         }
                     }
                 },
@@ -669,6 +833,7 @@
                             id: Number(task.id) || 0,
                             instance_id: task.instance_id || `${task.id || 'task'}-${task.state_key || this.monthlyMonthKey}`,
                             due_day: this.normalizeMonthlyDueDay(task.due_day),
+                            due_time: this.sanitizeDueTime(task.due_time, '23:59') || '23:59',
                             repeat_type: this.normalizeMonthlyRepeatType(task.repeat_type),
                             repeat_weekday: this.normalizeMonthlyRepeatWeekday(task.repeat_weekday),
                             date_key: this.sanitizeDateKey(task.date_key),
@@ -720,6 +885,222 @@
                     this.debts = Array.isArray(payload.items) ? payload.items : [];
                     this.debtsMonthKey = payload.month_key || cleanMonthKey;
                     this.debtsSummary = payload.summary || { count: 0, total: 0, monthly: 0, debt_total: 0, debt_monthly: 0, fixed_monthly: 0, fixed_count: 0, debt_count: 0 };
+                },
+
+                getDefaultNotificationSettings() {
+                    return {
+                        enabled: true,
+                        opening_enabled: true,
+                        opening_time: '08:00',
+                        day_summary_enabled: true,
+                        day_summary_time: '20:30',
+                        medication_enabled: true,
+                        medication_repeat_minutes: 5,
+                        task_reminder_enabled: true,
+                        task_reminder_repeat_minutes: 120,
+                        timezone: 'Europe/Warsaw'
+                    };
+                },
+
+                async loadNotificationSettings() {
+                    this.pushState.permission = typeof Notification === 'undefined' ? 'unsupported' : Notification.permission;
+                    try {
+                        const response = await fetch(`${this.API}/notifications/settings`);
+                        if (!response.ok) throw new Error('notification_settings_failed');
+                        const payload = await response.json();
+                        this.notificationSettings = {
+                            ...this.getDefaultNotificationSettings(),
+                            ...(payload.settings || {})
+                        };
+                        this.pushState.subscriptionCount = Number(payload.subscription_count || 0);
+                        this.pushState.vapidConfigured = !!payload.vapid_configured;
+                    } catch (error) {
+                        this.notificationSettings = this.getDefaultNotificationSettings();
+                    }
+                    await this.refreshPushState();
+                },
+
+                isIOSDevice() {
+                    return /iPad|iPhone|iPod/.test(navigator.userAgent || '') || (
+                        navigator.platform === 'MacIntel' && Number(navigator.maxTouchPoints || 0) > 1
+                    );
+                },
+
+                isStandalonePWA() {
+                    return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+                },
+
+                async registerServiceWorker() {
+                    this.pushState.supported = 'serviceWorker' in navigator && 'PushManager' in window && typeof Notification !== 'undefined';
+                    if (!this.pushState.supported) {
+                        this.pushState.message = this.isIOSDevice() && !this.isStandalonePWA()
+                            ? 'Na iPhonie powiadomienia wlaczysz po otwarciu aplikacji z ikony na ekranie glownym.'
+                            : 'Ta przegladarka nie wspiera Web Push.';
+                        return null;
+                    }
+                    try {
+                        const registration = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
+                        this.pushState.serviceWorkerReady = true;
+                        await this.refreshPushState(registration);
+                        return registration;
+                    } catch (error) {
+                        this.pushState.serviceWorkerReady = false;
+                        this.pushState.message = 'Nie udalo sie zarejestrowac Service Workera.';
+                        return null;
+                    }
+                },
+
+                async refreshPushState(registration = null) {
+                    this.pushState.supported = 'serviceWorker' in navigator && 'PushManager' in window && typeof Notification !== 'undefined';
+                    this.pushState.permission = typeof Notification === 'undefined' ? 'unsupported' : Notification.permission;
+                    if (!this.pushState.supported) return;
+                    try {
+                        const readyRegistration = registration || await navigator.serviceWorker.ready;
+                        const subscription = await readyRegistration.pushManager.getSubscription();
+                        this.pushState.subscribed = !!subscription;
+                    } catch (error) {
+                        this.pushState.subscribed = false;
+                    }
+                },
+
+                async loadVapidPublicKey() {
+                    if (this.pushState.publicKey) return this.pushState.publicKey;
+                    const response = await fetch(`${this.API}/notifications/vapid-public-key`);
+                    if (!response.ok) throw new Error('vapid_key_failed');
+                    const payload = await response.json();
+                    this.pushState.publicKey = payload.public_key || '';
+                    this.pushState.vapidConfigured = !!payload.configured;
+                    return this.pushState.publicKey;
+                },
+
+                urlBase64ToUint8Array(base64String) {
+                    const padding = '='.repeat((4 - base64String.length % 4) % 4);
+                    const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+                    const rawData = window.atob(base64);
+                    const outputArray = new Uint8Array(rawData.length);
+                    for (let index = 0; index < rawData.length; index++) {
+                        outputArray[index] = rawData.charCodeAt(index);
+                    }
+                    return outputArray;
+                },
+
+                async enablePushNotifications() {
+                    if (!this.pushState.supported) {
+                        alert(this.isIOSDevice() && !this.isStandalonePWA()
+                            ? 'Na iPhonie dodaj aplikacje do ekranu glownego i otworz ja z ikony.'
+                            : 'Ta przegladarka nie wspiera Web Push.');
+                        return;
+                    }
+
+                    const publicKey = await this.loadVapidPublicKey();
+                    if (!publicKey) {
+                        alert('Brakuje VAPID_PUBLIC_KEY na backendzie. Wygeneruj klucze i dodaj je do .env.');
+                        return;
+                    }
+
+                    // If your API lives on a different domain, replace this.API endpoints with that backend URL.
+                    const permission = await Notification.requestPermission();
+                    this.pushState.permission = permission;
+                    if (permission !== 'granted') {
+                        this.pushState.message = 'Powiadomienia nie dostaly zgody w przegladarce.';
+                        return;
+                    }
+
+                    const registration = await navigator.serviceWorker.ready;
+                    let subscription = await registration.pushManager.getSubscription();
+                    if (!subscription) {
+                        subscription = await registration.pushManager.subscribe({
+                            userVisibleOnly: true,
+                            applicationServerKey: this.urlBase64ToUint8Array(publicKey)
+                        });
+                    }
+
+                    const response = await fetch(`${this.API}/notifications/subscribe`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            subscription: subscription.toJSON(),
+                            user_agent: navigator.userAgent || ''
+                        })
+                    });
+                    if (!response.ok) {
+                        alert(await this.getApiErrorMessage(response, 'Nie udalo sie zapisac subskrypcji powiadomien.'));
+                        return;
+                    }
+
+                    const payload = await response.json();
+                    this.pushState.subscribed = true;
+                    this.pushState.subscriptionCount = Number(payload.subscription_count || 1);
+                    this.pushState.message = 'Powiadomienia sa wlaczone na tym urzadzeniu.';
+                },
+
+                async disablePushNotifications() {
+                    if (!this.pushState.supported) return;
+                    const registration = await navigator.serviceWorker.ready;
+                    const subscription = await registration.pushManager.getSubscription();
+                    if (!subscription) {
+                        this.pushState.subscribed = false;
+                        return;
+                    }
+                    const endpoint = subscription.endpoint;
+                    await subscription.unsubscribe();
+                    await fetch(`${this.API}/notifications/unsubscribe`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ endpoint })
+                    });
+                    this.pushState.subscribed = false;
+                    this.pushState.subscriptionCount = Math.max(0, Number(this.pushState.subscriptionCount || 0) - 1);
+                    this.pushState.message = 'Powiadomienia wylaczone na tym urzadzeniu.';
+                },
+
+                async saveNotificationSettings() {
+                    const settings = {
+                        ...this.notificationSettings,
+                        medication_repeat_minutes: Math.max(1, Number(this.notificationSettings.medication_repeat_minutes || 5)),
+                        task_reminder_repeat_minutes: Math.max(15, Number(this.notificationSettings.task_reminder_repeat_minutes || 120))
+                    };
+                    const response = await fetch(`${this.API}/notifications/settings`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(settings)
+                    });
+                    if (!response.ok) {
+                        alert(await this.getApiErrorMessage(response, 'Nie udalo sie zapisac ustawien powiadomien.'));
+                        return;
+                    }
+                    const payload = await response.json();
+                    this.notificationSettings = {
+                        ...this.getDefaultNotificationSettings(),
+                        ...(payload.settings || {})
+                    };
+                    this.pushState.subscriptionCount = Number(payload.subscription_count || this.pushState.subscriptionCount || 0);
+                    this.pushState.vapidConfigured = !!payload.vapid_configured;
+                    this.pushState.message = 'Ustawienia powiadomien zapisane.';
+                },
+
+                async sendTestNotification() {
+                    const response = await fetch(`${this.API}/notifications/test`, { method: 'POST' });
+                    if (!response.ok) {
+                        alert(await this.getApiErrorMessage(response, 'Nie udalo sie wyslac testowego powiadomienia.'));
+                        return;
+                    }
+                    this.pushState.message = 'Wyslano testowe powiadomienie.';
+                },
+
+                getPushPermissionLabel() {
+                    if (this.pushState.permission === 'granted') return 'zgoda udzielona';
+                    if (this.pushState.permission === 'denied') return 'zablokowane';
+                    if (this.pushState.permission === 'unsupported') return 'brak wsparcia';
+                    return 'czeka na zgode';
+                },
+
+                getNotificationStatusLabel() {
+                    if (this.isIOSDevice() && !this.isStandalonePWA()) return 'otworz z ekranu glownego';
+                    if (!this.pushState.supported) return 'brak wsparcia';
+                    if (!this.pushState.vapidConfigured) return 'brak kluczy VAPID';
+                    if (this.pushState.subscribed) return 'wlaczone na tym urzadzeniu';
+                    return 'wylaczone na tym urzadzeniu';
                 },
 
                 async loadRewardSummary() {
@@ -897,18 +1278,23 @@
                     return labels[this.normalizeMonthlyRepeatWeekday(weekday) - 1] || labels[0];
                 },
 
+                getMonthlyDueTime(task) {
+                    return this.sanitizeDueTime(task?.due_time, '23:59') || '23:59';
+                },
+
                 getMonthlyDueLabel(task) {
+                    const dueTime = this.getMonthlyDueTime(task);
                     if (this.normalizeMonthlyRepeatType(task?.repeat_type) === 'weekly') {
                         const dayLabel = this.getWeekdayLabel(task?.repeat_weekday);
                         if (task?.date_key) {
                             const date = this.keyToDate(task.date_key);
-                            return `${dayLabel} • ${date.getDate()}.${String(date.getMonth() + 1).padStart(2, '0')}`;
+                            return `${dayLabel} • ${date.getDate()}.${String(date.getMonth() + 1).padStart(2, '0')} • ${dueTime}`;
                         }
-                        return `co tydzien: ${dayLabel}`;
+                        return `co tydzien: ${dayLabel} • ${dueTime}`;
                     }
                     const dueDay = this.normalizeMonthlyDueDay(task?.due_day);
                     if (!dueDay) return 'bez dnia';
-                    return `do ${dueDay}. dnia miesiaca`;
+                    return `do ${dueDay}. dnia miesiaca • ${dueTime}`;
                 },
 
                 getMonthlyDueBadgeClass(task) {
@@ -939,6 +1325,31 @@
                     return `do ${dueDay}. dnia mies.`;
                 },
 
+                getDebtPaymentNoun(item) {
+                    return (item?.kind || 'debt') === 'fixed' ? 'Oplata' : 'Rata';
+                },
+
+                getDebtPaymentDoneLabel(item) {
+                    const noun = this.getDebtPaymentNoun(item);
+                    return item?.month_done
+                        ? `${noun} odhaczona na ten miesiac`
+                        : `Oznacz: ${noun.toLowerCase()} oplacona`;
+                },
+
+                getDebtMonthlyLabel(item) {
+                    return (item?.kind || 'debt') === 'fixed' ? 'Kwota oplaty' : 'Rata mies.';
+                },
+
+                getDebtPrimaryAmountLabel(item) {
+                    return (item?.kind || 'debt') === 'fixed' ? 'Koszt' : 'Calosc';
+                },
+
+                getDebtPrimaryAmount(item) {
+                    return (item?.kind || 'debt') === 'fixed'
+                        ? Number(item?.monthly_amount || 0)
+                        : Number(item?.total_amount || 0);
+                },
+
                 getDebtsByKind(kind) {
                     return this.debts.filter(item => (item.kind || 'debt') === kind);
                 },
@@ -946,11 +1357,23 @@
                 resetMonthlyTaskDraft() {
                     this.newMonthlyTaskName = '';
                     this.newMonthlyTaskDueDay = '';
+                    this.newMonthlyTaskDueTime = '23:59';
                     this.newMonthlyTaskRepeatType = 'monthly';
                     this.newMonthlyTaskRepeatWeekday = 1;
+                    this.editingMonthlyTaskId = null;
                 },
 
-                openMonthlyTaskModal() {
+                openMonthlyTaskModal(task = null) {
+                    if (task && Number(task.id) > 0) {
+                        this.editingMonthlyTaskId = Number(task.id);
+                        this.newMonthlyTaskName = (task.name || '').toString();
+                        this.newMonthlyTaskDueDay = this.normalizeMonthlyDueDay(task.due_day) || '';
+                        this.newMonthlyTaskDueTime = this.getMonthlyDueTime(task);
+                        this.newMonthlyTaskRepeatType = this.normalizeMonthlyRepeatType(task.repeat_type);
+                        this.newMonthlyTaskRepeatWeekday = this.normalizeMonthlyRepeatWeekday(task.repeat_weekday);
+                    } else {
+                        this.resetMonthlyTaskDraft();
+                    }
                     this.monthlyTaskModal = true;
                 },
 
@@ -1114,6 +1537,10 @@
                     });
                 },
 
+                isCalendarTimelineEntry(entry) {
+                    return entry?.type === 'task' || entry?.type === 'monthly';
+                },
+
                 getDaysBetweenDateKeys(fromDateKey, toDateKey) {
                     const from = this.sanitizeDateKey(fromDateKey);
                     const to = this.sanitizeDateKey(toDateKey);
@@ -1138,7 +1565,7 @@
                             entries,
                             timelineMetrics: dayDraft.timelineMetrics,
                             timelineEntries: dayDraft.timelineEntries,
-                            nonTaskEntries: entries.filter(entry => entry?.type !== 'task'),
+                            nonTaskEntries: entries.filter(entry => entry?.type === 'debt'),
                             plannedMinutes: workload.plannedMinutes,
                             isOverLimit: workload.isOverLimit
                         });
@@ -1161,7 +1588,7 @@
                 getCalendarTimelineWindow(day = null, entries = null) {
                     const sourceEntries = Array.isArray(entries) ? entries : (day?.entries || []);
                     const taskRanges = sourceEntries
-                        .filter(entry => entry?.type === 'task')
+                        .filter(entry => this.isCalendarTimelineEntry(entry))
                         .map(entry => this.getCalendarTaskTimelineRange(entry));
 
                     const fallbackStart = 6 * 60;
@@ -1311,7 +1738,7 @@
                     const sourceEntries = Array.isArray(entries) ? entries : (day?.entries || []);
                     const window = this.getCalendarTimelineWindow(day, sourceEntries);
                     const taskRanges = sourceEntries
-                        .filter(entry => entry?.type === 'task')
+                        .filter(entry => this.isCalendarTimelineEntry(entry))
                         .map(entry => this.getCalendarTaskTimelineRange(entry));
 
                     const segmentsData = this.getCalendarTimelineSegments(taskRanges, window.dayStart, window.dayEnd);
@@ -1357,7 +1784,7 @@
                     return markers;
                 },
 
-                timeLabelToMinutes(timeValue, fallbackMinutes = 14 * 60) {
+                timeLabelToMinutes(timeValue, fallbackMinutes = (23 * 60) + 59) {
                     const clean = this.sanitizeDueTime(timeValue, '');
                     if (!clean) return fallbackMinutes;
                     const [hours, minutes] = clean.split(':').map(Number);
@@ -1373,8 +1800,10 @@
 
                 getCalendarTaskTimelineRange(entry) {
                     const dueTime = this.getCalendarEntryTime(entry);
-                    const dueMinutes = this.timeLabelToMinutes(dueTime, 14 * 60);
-                    const durationMinutes = Math.max(15, this.getTaskEffectiveEstimatedMinutes(entry?.item));
+                    const dueMinutes = this.timeLabelToMinutes(dueTime, (23 * 60) + 59);
+                    const durationMinutes = entry?.type === 'task'
+                        ? Math.max(15, this.getTaskEffectiveEstimatedMinutes(entry?.item))
+                        : 30;
                     const startMinutes = Math.max(0, dueMinutes - durationMinutes);
                     const endMinutes = Math.max(startMinutes + 15, dueMinutes);
                     return {
@@ -1389,7 +1818,7 @@
                     const { dayStart, dayEnd, virtualSpan } = metrics;
 
                     const taskEntries = (entries || [])
-                        .filter(entry => entry?.type === 'task')
+                        .filter(entry => this.isCalendarTimelineEntry(entry))
                         .map(entry => {
                             const range = this.getCalendarTaskTimelineRange(entry);
                             const clampedStart = Math.max(dayStart, Math.min(dayEnd, range.startMinutes));
@@ -1541,12 +1970,13 @@
                 },
 
                 getCalendarEntryTime(entry) {
-                    if (entry?.type !== 'task') return '';
-                    return this.getTaskDueTime(entry.item) || '14:00';
+                    if (entry?.type === 'task') return this.getTaskDueTime(entry.item) || '23:59';
+                    if (entry?.type === 'monthly') return this.getMonthlyDueTime(entry.item);
+                    return '';
                 },
 
                 getCalendarEntrySortScore(entry) {
-                    if (entry?.type === 'task') {
+                    if (entry?.type === 'task' || entry?.type === 'monthly') {
                         const dueTime = this.getCalendarEntryTime(entry);
                         if (/^([01]\d|2[0-3]):[0-5]\d$/.test(dueTime)) {
                             const [hours, minutes] = dueTime.split(':').map(Number);
@@ -1555,7 +1985,6 @@
                         return 24 * 60;
                     }
                     if (entry?.type === 'debt') return (24 * 60) + 10;
-                    if (entry?.type === 'monthly') return (24 * 60) + 20;
                     return (24 * 60) + 30;
                 },
 
@@ -1649,7 +2078,7 @@
                     return /^\d{4}-\d{2}-\d{2}$/.test(clean) ? clean : '';
                 },
 
-                sanitizeDueTime(value, fallback = '14:00') {
+                sanitizeDueTime(value, fallback = '23:59') {
                     const clean = (value || '').toString().trim();
                     if (/^([01]\d|2[0-3]):[0-5]\d$/.test(clean)) return clean;
                     if (/^([01]\d|2[0-3]):[0-5]\d:[0-5]\d$/.test(clean)) return clean.slice(0, 5);
@@ -1662,16 +2091,16 @@
                 getTaskDueDateTime(task) {
                     const dueDate = this.sanitizeDateKey(task?.due_date);
                     if (!dueDate) return null;
-                    const dueTime = this.sanitizeDueTime(task?.due_time, '14:00') || '14:00';
+                    const dueTime = this.sanitizeDueTime(task?.due_time, '23:59') || '23:59';
                     const [hours, minutes] = dueTime.split(':').map(Number);
                     const due = this.keyToDate(dueDate);
-                    due.setHours(hours || 14, minutes || 0, 0, 0);
+                    due.setHours(hours || 0, minutes || 0, 0, 0);
                     return due;
                 },
 
                 getTaskDueTime(task) {
                     if (!this.sanitizeDateKey(task?.due_date)) return '';
-                    return this.sanitizeDueTime(task?.due_time, '14:00');
+                    return this.sanitizeDueTime(task?.due_time, '23:59');
                 },
 
                 getTaskDoneDateKey(task) {
@@ -2408,17 +2837,32 @@
                 },
 
                 getBrainDumpPreview() {
-                    const trimmed = (this.brainDump || '').trim();
-                    if (!trimmed) {
-                        return 'Brain dump jest pusty. To dobre miejsce na wrzucenie wszystkiego, co blokuje skupienie.';
+                    if (this.brainDumpNotes.length === 0) {
+                        return 'Brain dump jest pusty. Dodaj osobna notatke na kazdy zrzut mysli.';
                     }
-                    const lines = trimmed.split('\n').map(line => line.trim()).filter(Boolean);
-                    if (lines.length === 1) return lines[0];
-                    return `${lines.slice(0, 3).join(' • ')}${lines.length > 3 ? ' ...' : ''}`;
+                    const snippets = this.brainDumpNotes.slice(0, 3).map(note => {
+                        const firstLine = (note.content || '').split('\n').map(line => line.trim()).find(Boolean);
+                        return firstLine || note.title || 'Nowa notatka';
+                    });
+                    return `${snippets.join(' • ')}${this.brainDumpNotes.length > 3 ? ' ...' : ''}`;
                 },
 
                 countBrainDumpLines() {
+                    return this.brainDumpNotes.reduce((sum, note) => (
+                        sum + (note.content || '').split('\n').map(line => line.trim()).filter(Boolean).length
+                    ), 0);
+                },
+
+                countActiveBrainDumpLines() {
                     return (this.brainDump || '').split('\n').map(line => line.trim()).filter(Boolean).length;
+                },
+
+                getBrainDumpLastSavedAt() {
+                    const timestamps = this.brainDumpNotes
+                        .map(note => note.updated_at || '')
+                        .filter(Boolean)
+                        .sort();
+                    return timestamps[timestamps.length - 1] || this.noteSavedAt || '';
                 },
 
                 taskMatchesPriority(task) {
@@ -2607,7 +3051,7 @@
 
                 pickTaskPayload(task) {
                     const dueDate = this.sanitizeDateKey(task.due_date);
-                    const dueTime = dueDate ? this.sanitizeDueTime(task.due_time, '14:00') : '';
+                    const dueTime = dueDate ? this.sanitizeDueTime(task.due_time, '23:59') : '';
                     return {
                         name: task.name,
                         module_id: Number(task.module_id) || 0,
@@ -2931,6 +3375,12 @@
                 handleKeydown(event) {
                     const targetTag = event?.target?.tagName?.toLowerCase();
                     const isTypingField = ['input', 'textarea', 'select'].includes(targetTag) || event?.target?.isContentEditable;
+                    if (event.key === 'Escape' && (this.settingsMenuOpen || this.fabOpen)) {
+                        event.preventDefault();
+                        this.closeOverlayMenus();
+                        return;
+                    }
+
                     if (this.view === 'canvas' && event.key === 'Escape') {
                         this.clearCanvasSelection();
                         return;
@@ -2979,7 +3429,7 @@
                         module_id: targetModuleId,
                         description: '',
                         due_date: '',
-                        due_time: '14:00',
+                        due_time: '23:59',
                         estimated_time: 15,
                         points_weight: 1,
                         priority: '',
@@ -3017,7 +3467,7 @@
                     this.editingTask = {
                         description: '',
                         due_date: '',
-                        due_time: '14:00',
+                        due_time: '23:59',
                         estimated_time: 15,
                         points_weight: 1,
                         priority: '',
@@ -3028,7 +3478,7 @@
                         priority: this.normalizePriorityValue(task?.priority),
                         estimated_time: effectiveMinutes,
                         points_weight: effectivePoints,
-                        due_time: this.sanitizeDueTime(task?.due_time, task?.due_date ? '14:00' : ''),
+                        due_time: this.sanitizeDueTime(task?.due_time, task?.due_date ? '23:59' : ''),
                         subtasks: normalizedSubtasks
                     };
                     this.taskModal = true;
@@ -3056,7 +3506,7 @@
                         const pickedDueTime = this.$refs?.taskDueTimeInput?.value || this.editingTask.due_time;
                         this.editingTask.due_date = this.sanitizeDateKey(pickedDueDate);
                         this.editingTask.due_time = this.editingTask.due_date
-                            ? this.sanitizeDueTime(pickedDueTime, '14:00')
+                            ? this.sanitizeDueTime(pickedDueTime, '23:59')
                             : '';
                         this.editingTask.estimated_time = this.normalizeEstimatedMinutes(this.editingTask.estimated_time) || 15;
                         this.editingTask.points_weight = this.normalizePointsWeight(this.editingTask.points_weight);
@@ -3191,17 +3641,101 @@
                     await this.init();
                 },
 
+                applyActiveBrainDumpNote(note) {
+                    if (!note) {
+                        this.activeBrainDumpNoteId = null;
+                        this.brainDumpNoteTitle = '';
+                        this.brainDump = '';
+                        this.noteSavedAt = '';
+                        return;
+                    }
+                    const normalized = this.normalizeBrainDumpNote(note);
+                    this.activeBrainDumpNoteId = normalized.id;
+                    this.brainDumpNoteTitle = normalized.title;
+                    this.brainDump = normalized.content;
+                    this.noteSavedAt = normalized.updated_at;
+                },
+
+                getActiveBrainDumpNote() {
+                    return this.brainDumpNotes.find(note => note.id === Number(this.activeBrainDumpNoteId)) || null;
+                },
+
+                updateActiveBrainDumpDraft() {
+                    const noteId = Number(this.activeBrainDumpNoteId);
+                    if (!noteId) return;
+                    this.brainDumpNotes = this.brainDumpNotes.map(note => (
+                        note.id === noteId
+                            ? { ...note, title: this.brainDumpNoteTitle || 'Nowa notatka', content: this.brainDump || '' }
+                            : note
+                    ));
+                },
+
+                async createBrainDumpNote(content = '', title = 'Nowa notatka', focusEditor = true) {
+                    const response = await fetch(`${this.API}/brain-dump-notes`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ title, content })
+                    });
+                    if (!response.ok) {
+                        alert(await this.getApiErrorMessage(response, 'Nie udalo sie utworzyc notatki.'));
+                        return null;
+                    }
+                    const note = this.normalizeBrainDumpNote(await response.json());
+                    this.brainDumpNotes = [note, ...this.brainDumpNotes.filter(item => item.id !== note.id)];
+                    this.applyActiveBrainDumpNote(note);
+                    if (focusEditor) {
+                        window.setTimeout(() => document.querySelector('[data-brain-dump-input]')?.focus(), 0);
+                    }
+                    return note;
+                },
+
+                async createEmptyBrainDumpNote() {
+                    await this.saveBrainDump(true);
+                    await this.createBrainDumpNote('', 'Nowa notatka');
+                },
+
+                async selectBrainDumpNote(noteId) {
+                    if (Number(noteId) === Number(this.activeBrainDumpNoteId)) return;
+                    await this.saveBrainDump(true);
+                    const note = this.brainDumpNotes.find(item => item.id === Number(noteId)) || null;
+                    this.applyActiveBrainDumpNote(note);
+                },
+
+                async deleteBrainDumpNote(noteId = null) {
+                    const targetId = Number(noteId || this.activeBrainDumpNoteId);
+                    if (!targetId) return;
+                    if (!confirm('Usunac te notatke?')) return;
+                    const response = await fetch(`${this.API}/brain-dump-notes/${targetId}`, { method: 'DELETE' });
+                    if (!response.ok) {
+                        alert(await this.getApiErrorMessage(response, 'Nie udalo sie usunac notatki.'));
+                        return;
+                    }
+                    this.brainDumpNotes = this.brainDumpNotes.filter(note => note.id !== targetId);
+                    this.applyActiveBrainDumpNote(this.brainDumpNotes[0] || null);
+                },
+
                 async saveBrainDump(quiet = false) {
                     clearTimeout(this.brainDumpSaveTimer);
+                    if (!this.activeBrainDumpNoteId) {
+                        if (!(this.brainDump || '').trim() && !(this.brainDumpNoteTitle || '').trim()) return true;
+                        const created = await this.createBrainDumpNote(this.brainDump || '', this.brainDumpNoteTitle || 'Nowa notatka', false);
+                        return !!created;
+                    }
+
+                    this.updateActiveBrainDumpDraft();
                     try {
-                        const response = await fetch(`${this.API}/notes/brain-dump`, {
+                        const response = await fetch(`${this.API}/brain-dump-notes/${this.activeBrainDumpNoteId}`, {
                             method: 'PUT',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ content: this.brainDump })
+                            body: JSON.stringify({
+                                title: this.brainDumpNoteTitle || 'Nowa notatka',
+                                content: this.brainDump || ''
+                            })
                         });
-                        if (!response.ok) throw new Error('note_save_failed');
-                        const payload = await response.json();
-                        this.noteSavedAt = payload.updated_at || new Date().toISOString();
+                        if (!response.ok) throw new Error('brain_dump_save_failed');
+                        const note = this.normalizeBrainDumpNote(await response.json());
+                        this.brainDumpNotes = [note, ...this.brainDumpNotes.filter(item => item.id !== note.id)];
+                        this.applyActiveBrainDumpNote(note);
                         try {
                             localStorage.removeItem(this.brainDumpStorageKey);
                         } catch (error) {
@@ -3226,6 +3760,7 @@
                 },
 
                 handleBrainDumpInput() {
+                    this.updateActiveBrainDumpDraft();
                     try {
                         localStorage.setItem(this.brainDumpStorageKey, this.brainDump || '');
                     } catch (error) {
@@ -3237,6 +3772,19 @@
                     }, 700);
                 },
 
+                handleBrainDumpTitleInput() {
+                    this.updateActiveBrainDumpDraft();
+                    clearTimeout(this.brainDumpSaveTimer);
+                    this.brainDumpSaveTimer = setTimeout(() => {
+                        this.saveBrainDumpQuiet();
+                    }, 500);
+                },
+
+                clearActiveBrainDumpNote() {
+                    this.brainDump = '';
+                    this.handleBrainDumpInput();
+                },
+
                 async sendBrainDumpToModule() {
                     if (!this.brainDumpTargetModuleId) {
                         alert('Najpierw wybierz modul.');
@@ -3245,11 +3793,11 @@
 
                     const lines = (this.brainDump || '').split('\n').map(line => line.trim()).filter(Boolean);
                     if (lines.length === 0) {
-                        alert('Brain dump jest pusty.');
+                        alert('Aktywna notatka jest pusta.');
                         return;
                     }
 
-                    if (!confirm(`Stworzyc ${lines.length} zadan z brain dump?`)) return;
+                    if (!confirm(`Stworzyc ${lines.length} zadan z aktywnej notatki?`)) return;
 
                     for (const line of lines) {
                         await fetch(`${this.API}/tasks`, {
@@ -4064,20 +4612,28 @@
                         return;
                     }
                     const repeatType = this.normalizeMonthlyRepeatType(this.newMonthlyTaskRepeatType);
+                    const dueDay = repeatType === 'monthly' ? this.normalizeMonthlyDueDay(this.newMonthlyTaskDueDay) : 0;
+                    if (repeatType === 'monthly' && !dueDay) {
+                        alert('Podaj dzien miesiaca.');
+                        return;
+                    }
+                    const dueTime = this.sanitizeDueTime(this.newMonthlyTaskDueTime, '23:59') || '23:59';
+                    const taskId = Number(this.editingMonthlyTaskId || 0);
 
-                    const response = await fetch(`${this.API}/monthly-tasks`, {
-                        method: 'POST',
+                    const response = await fetch(taskId ? `${this.API}/monthly-tasks/${taskId}` : `${this.API}/monthly-tasks`, {
+                        method: taskId ? 'PUT' : 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
                             name,
-                            due_day: repeatType === 'monthly' ? this.normalizeMonthlyDueDay(this.newMonthlyTaskDueDay) : 0,
+                            due_day: dueDay,
+                            due_time: dueTime,
                             repeat_type: repeatType,
                             repeat_weekday: this.normalizeMonthlyRepeatWeekday(this.newMonthlyTaskRepeatWeekday)
                         })
                     });
 
                     if (!response.ok) {
-                        alert(await this.getApiErrorMessage(response, 'Nie udalo sie dodac zadania miesiecznego.'));
+                        alert(await this.getApiErrorMessage(response, taskId ? 'Nie udalo sie zapisac zadania miesiecznego.' : 'Nie udalo sie dodac zadania miesiecznego.'));
                         return;
                     }
 
@@ -4094,6 +4650,7 @@
                         return;
                     }
                     const repeatType = this.normalizeMonthlyRepeatType(task.repeat_type);
+                    const dueTime = this.sanitizeDueTime(task.due_time, '23:59') || '23:59';
 
                     const response = await fetch(`${this.API}/monthly-tasks/${task.id}`, {
                         method: 'PUT',
@@ -4101,6 +4658,7 @@
                         body: JSON.stringify({
                             name,
                             due_day: repeatType === 'monthly' ? this.normalizeMonthlyDueDay(task.due_day) : 0,
+                            due_time: dueTime,
                             repeat_type: repeatType,
                             repeat_weekday: this.normalizeMonthlyRepeatWeekday(task.repeat_weekday)
                         })
@@ -4174,8 +4732,8 @@
                         name,
                         place: (this.newDebt.place || '').trim(),
                         kind: this.newDebt.kind === 'fixed' ? 'fixed' : 'debt',
-                        total_amount: Number(this.newDebt.total_amount || 0),
-                        monthly_amount: Number(this.newDebt.monthly_amount || 0),
+                        total_amount: this.newDebt.kind === 'fixed' ? 0 : Number(this.newDebt.total_amount || 0),
+                        monthly_amount: Number(this.newDebt.monthly_amount || this.newDebt.total_amount || 0),
                         due_day: this.normalizeMonthlyDueDay(this.newDebt.due_day),
                         note: (this.newDebt.note || '').trim()
                     };

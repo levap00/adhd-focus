@@ -29,10 +29,20 @@ def _serialize_debt(row):
     item["kind"] = _normalize_debt_kind(item.get("kind"))
     item["total_amount"] = round(float(item.get("total_amount") or 0), 2)
     item["monthly_amount"] = round(float(item.get("monthly_amount") or 0), 2)
+    if item["kind"] == "fixed":
+        item["total_amount"] = 0.0
     item["due_day"] = min(31, parse_non_negative_int(item.get("due_day")))
     item["paid_months"] = parse_non_negative_int(item.get("paid_months"))
     item["month_done"] = bool(item.get("month_done"))
     return item
+
+
+def _normalize_debt_amounts(kind: str, total_amount, monthly_amount) -> tuple[float, float]:
+    total = parse_non_negative_float(total_amount)
+    monthly = parse_non_negative_float(monthly_amount)
+    if kind == "fixed":
+        return 0.0, monthly if monthly > 0 else total
+    return total, monthly
 
 
 def _get_summary(conn, user_id: int):
@@ -40,7 +50,7 @@ def _get_summary(conn, user_id: int):
         """
         SELECT
             COUNT(*) AS count,
-            COALESCE(SUM(total_amount), 0) AS total,
+            COALESCE(SUM(CASE WHEN kind = 'debt' THEN total_amount ELSE 0 END), 0) AS total,
             COALESCE(SUM(monthly_amount), 0) AS monthly,
             COALESCE(SUM(CASE WHEN kind = 'debt' THEN total_amount ELSE 0 END), 0) AS debt_total,
             COALESCE(SUM(CASE WHEN kind = 'debt' THEN monthly_amount ELSE 0 END), 0) AS debt_monthly,
@@ -110,8 +120,7 @@ def add_debt(payload: DebtCreate):
     if len(note) > 300:
         raise HTTPException(status_code=400, detail="Notatka moze miec maksymalnie 300 znakow")
 
-    total_amount = parse_non_negative_float(payload.total_amount)
-    monthly_amount = parse_non_negative_float(payload.monthly_amount)
+    total_amount, monthly_amount = _normalize_debt_amounts(kind, payload.total_amount, payload.monthly_amount)
     due_day = min(31, parse_non_negative_int(payload.due_day))
 
     now = utc_now_iso()
@@ -171,11 +180,14 @@ def update_debt(debt_id: int, payload: DebtUpdate):
             if len(update_data["note"]) > 300:
                 raise HTTPException(status_code=400, detail="Notatka moze miec maksymalnie 300 znakow")
 
-        if "total_amount" in update_data:
-            update_data["total_amount"] = parse_non_negative_float(update_data["total_amount"])
-
-        if "monthly_amount" in update_data:
-            update_data["monthly_amount"] = parse_non_negative_float(update_data["monthly_amount"])
+        next_kind = update_data.get("kind") or existing["kind"]
+        next_kind = _normalize_debt_kind(next_kind)
+        next_total = update_data.get("total_amount", existing["total_amount"])
+        next_monthly = update_data.get("monthly_amount", existing["monthly_amount"])
+        normalized_total, normalized_monthly = _normalize_debt_amounts(next_kind, next_total, next_monthly)
+        update_data["kind"] = next_kind
+        update_data["total_amount"] = normalized_total
+        update_data["monthly_amount"] = normalized_monthly
 
         if "due_day" in update_data:
             update_data["due_day"] = min(31, parse_non_negative_int(update_data["due_day"]))

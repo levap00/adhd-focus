@@ -1,7 +1,8 @@
 import json
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import requests
 from fastapi import APIRouter, HTTPException, Query
@@ -25,6 +26,7 @@ router = APIRouter()
 MAX_SUBTASK_TITLE = 180
 WORKDAY_LIMIT_MINUTES = 8 * 60
 DONE_STAMP_RE = re.compile(r"\[Done:\s*(\d{4}-\d{2}-\d{2})\]")
+DEFAULT_WIDGET_TIMEZONE = "Europe/Warsaw"
 
 
 def _current_account() -> AccountConfig:
@@ -620,6 +622,65 @@ def _today_key_utc() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
 
+def _widget_timezone_name(conn, user_id: int) -> str:
+    row = conn.execute(
+        "SELECT timezone FROM notification_settings WHERE owner_user_id = ?",
+        (user_id,),
+    ).fetchone()
+    if not row:
+        return DEFAULT_WIDGET_TIMEZONE
+    return (row["timezone"] or DEFAULT_WIDGET_TIMEZONE).strip() or DEFAULT_WIDGET_TIMEZONE
+
+
+def _widget_zoneinfo(timezone_name: str):
+    clean_timezone_name = (timezone_name or DEFAULT_WIDGET_TIMEZONE).strip() or DEFAULT_WIDGET_TIMEZONE
+    try:
+        return ZoneInfo(clean_timezone_name)
+    except ZoneInfoNotFoundError:
+        try:
+            return ZoneInfo(DEFAULT_WIDGET_TIMEZONE)
+        except ZoneInfoNotFoundError:
+            return timezone.utc
+
+
+def _date_key_after(date_key: str, days: int) -> str:
+    return (datetime.strptime(date_key, "%Y-%m-%d").date() + timedelta(days=days)).isoformat()
+
+
+def _is_android_widget_task_overdue(due_date: str, due_time: str, now_local: datetime) -> bool:
+    clean_due_date = normalize_due_date(due_date)
+    if not clean_due_date:
+        return False
+    today_key = now_local.date().isoformat()
+    if clean_due_date < today_key:
+        return True
+    if clean_due_date != today_key:
+        return False
+
+    clean_due_time = normalize_due_time(due_time, default="")
+    if not clean_due_time:
+        return False
+    return clean_due_time < now_local.strftime("%H:%M")
+
+
+def _android_widget_task_payload(row, current_user_id: int, now_local: datetime) -> dict:
+    due_time = normalize_due_time(row["due_time"] or "", default="")
+    owner_user_id = int(row["owner_user_id"] or 0)
+    share_count = int(row["share_count"] or 0)
+    return {
+        "name": (row["name"] or "").strip() or "(bez nazwy)",
+        "time": due_time,
+        "is_shared": owner_user_id != current_user_id or share_count > 0,
+        "is_overdue": _is_android_widget_task_overdue(row["due_date"] or "", due_time, now_local),
+    }
+
+
+def _progress_percent(done: int, total: int) -> float:
+    if total <= 0:
+        return 0.0
+    return round((done / total) * 100, 1)
+
+
 def _clip_subtask_title(title: str) -> str:
     clean_title = (title or "").strip()
     if len(clean_title) > MAX_SUBTASK_TITLE:
@@ -719,8 +780,8 @@ def _choose_parent_status(target_task: dict, source_task: dict, merged_subtasks:
 def _choose_parent_due(tasks: list[dict]) -> tuple[str, str]:
     def sort_key(task: dict) -> tuple[str, str]:
         due_date = normalize_due_date(task.get("due_date") or "")
-        due_time = normalize_due_time(task.get("due_time") or "", default="14:00") if due_date else ""
-        return due_date, due_time or "14:00"
+        due_time = normalize_due_time(task.get("due_time") or "", default="23:59") if due_date else ""
+        return due_date, due_time or "23:59"
 
     open_candidates = [
         task
@@ -737,7 +798,7 @@ def _choose_parent_due(tasks: list[dict]) -> tuple[str, str]:
 
     selected = min(candidates, key=sort_key)
     due_date = normalize_due_date(selected.get("due_date") or "")
-    due_time = normalize_due_time(selected.get("due_time") or "", default="14:00") if due_date else ""
+    due_time = normalize_due_time(selected.get("due_time") or "", default="23:59") if due_date else ""
     return due_date, due_time
 
 
@@ -878,6 +939,173 @@ def get_day_workload(
         "limit_minutes": WORKDAY_LIMIT_MINUTES,
         "is_over_limit": planned_minutes > WORKDAY_LIMIT_MINUTES,
         "includes_carry_over": False,
+    }
+
+
+@router.get("/tasks/widget/android")
+def get_android_widget_tasks(
+    date: str | None = Query(None),
+    limit: int = Query(6, ge=1, le=6),
+):
+    current_account = _current_account()
+    raw_date = (date or "").strip()
+    if raw_date and not normalize_due_date(raw_date):
+        raise HTTPException(status_code=400, detail="Niepoprawna data (format YYYY-MM-DD).")
+
+    with get_db() as conn:
+        now_local = datetime.now(_widget_zoneinfo(_widget_timezone_name(conn, current_account.id)))
+        today_key = normalize_due_date(raw_date) if raw_date else now_local.date().isoformat()
+        tomorrow_key = _date_key_after(today_key, 1)
+
+        rows = conn.execute(
+            """
+            WITH shared_counts AS (
+                SELECT task_id, COUNT(*) AS share_count
+                FROM task_shares
+                GROUP BY task_id
+            )
+            SELECT
+                t.id,
+                t.name,
+                t.priority,
+                t.due_date,
+                t.due_time,
+                t.owner_user_id,
+                COALESCE(shared_counts.share_count, 0) AS share_count
+            FROM tasks t
+            LEFT JOIN shared_counts ON shared_counts.task_id = t.id
+            WHERE t.due_date IN (?, ?)
+              AND LOWER(TRIM(COALESCE(t.status, ''))) != 'gotowe'
+              AND (
+                  t.owner_user_id = ?
+                  OR EXISTS (
+                      SELECT 1
+                      FROM task_shares s
+                      WHERE s.task_id = t.id
+                        AND s.shared_user_id = ?
+                  )
+              )
+            ORDER BY
+                CASE t.due_date
+                    WHEN ? THEN 0
+                    WHEN ? THEN 1
+                    ELSE 2
+                END,
+                CASE UPPER(TRIM(COALESCE(t.priority, '')))
+                    WHEN 'P1' THEN 0
+                    WHEN 'P2' THEN 1
+                    WHEN 'P3' THEN 2
+                    ELSE 3
+                END,
+                COALESCE(NULLIF(TRIM(t.due_time), ''), '23:59'),
+                LOWER(TRIM(COALESCE(t.name, ''))),
+                t.id
+            """,
+            (
+                today_key,
+                tomorrow_key,
+                current_account.id,
+                current_account.id,
+                today_key,
+                tomorrow_key,
+            ),
+        ).fetchall()
+
+    buckets = {"today": [], "tomorrow": []}
+    counts = {"today_total": 0, "tomorrow_total": 0}
+
+    for row in rows:
+        due_date = normalize_due_date(row["due_date"] or "")
+        bucket_name = "today" if due_date == today_key else "tomorrow" if due_date == tomorrow_key else ""
+        if not bucket_name:
+            continue
+
+        counts[f"{bucket_name}_total"] += 1
+        if len(buckets[bucket_name]) >= limit:
+            continue
+
+        buckets[bucket_name].append(_android_widget_task_payload(row, current_account.id, now_local))
+
+    return {
+        "today": buckets["today"],
+        "tomorrow": buckets["tomorrow"],
+        "counts": counts,
+    }
+
+
+@router.get("/tasks/widget/progress")
+def get_progress_widget_data(
+    limit: int = Query(6, ge=1, le=12),
+):
+    current_account = _current_account()
+    with get_db() as conn:
+        now_local = datetime.now(_widget_zoneinfo(_widget_timezone_name(conn, current_account.id)))
+
+    today_key = now_local.date().isoformat()
+    tasks = _list_accessible_tasks(current_account)
+    total = 0
+    done = 0
+    today_open = 0
+    overdue_open = 0
+    done_today = 0
+    modules: dict[int, dict] = {}
+
+    for task in tasks:
+        total += 1
+        status = normalize_status(task.get("status"))
+        is_done = status == "gotowe"
+        if is_done:
+            done += 1
+            if _get_task_done_date(task.get("description") or "") == today_key:
+                done_today += 1
+        else:
+            due_date = normalize_due_date(task.get("due_date") or "")
+            if due_date == today_key:
+                today_open += 1
+            elif due_date and due_date < today_key:
+                overdue_open += 1
+
+        module_id = parse_non_negative_int(task.get("module_id"), default=0)
+        module = modules.setdefault(
+            module_id,
+            {
+                "id": module_id,
+                "name": (task.get("module_name") or "Bez modulu").strip() or "Bez modulu",
+                "total": 0,
+                "done": 0,
+                "open": 0,
+            },
+        )
+        module["total"] += 1
+        if is_done:
+            module["done"] += 1
+        else:
+            module["open"] += 1
+
+    module_items = []
+    for module in modules.values():
+        module_items.append(
+            {
+                **module,
+                "percent": _progress_percent(int(module["done"]), int(module["total"])),
+            }
+        )
+
+    module_items.sort(key=lambda item: (-int(item["open"]), -int(item["total"]), (item["name"] or "").lower()))
+
+    return {
+        "date": today_key,
+        "generated_at": utc_now_iso(),
+        "counts": {
+            "total": total,
+            "done": done,
+            "open": max(0, total - done),
+            "percent": _progress_percent(done, total),
+            "today_open": today_open,
+            "overdue_open": overdue_open,
+            "done_today": done_today,
+        },
+        "modules": module_items[:limit],
     }
 
 
@@ -1156,7 +1384,7 @@ def add_task(payload: TaskCreate):
     clean_status = normalize_status(payload.status)
     clean_description = (payload.description or "").strip()
     clean_due_date = normalize_due_date(payload.due_date)
-    clean_due_time = normalize_due_time(payload.due_time, default="14:00") if clean_due_date else ""
+    clean_due_time = normalize_due_time(payload.due_time, default="23:59") if clean_due_date else ""
     safe_estimated_time = parse_non_negative_int(payload.estimated_time)
     safe_points_weight = _normalize_points_weight(payload.points_weight)
     allow_time_overflow = bool(payload.allow_time_overflow)
@@ -1284,7 +1512,7 @@ def update_task(task_id: int, task_data: TaskUpdate):
 
         if "due_date" in update_data or "due_time" in update_data:
             next_due_date = normalize_due_date(update_data.get("due_date", existing_task.get("due_date", "")))
-            due_time_default = "14:00" if next_due_date else ""
+            due_time_default = "23:59" if next_due_date else ""
             next_due_time = normalize_due_time(
                 update_data.get("due_time", existing_task.get("due_time", "")),
                 default=due_time_default,

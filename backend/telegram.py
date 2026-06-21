@@ -95,6 +95,14 @@ TELEGRAM_SCHEDULE_GRACE_MINUTES = _parse_positive_int(
     default=10,
     minimum=1,
 )
+TELEGRAM_MEDICATION_REPEAT_WINDOW_HOURS = min(
+    24,
+    _parse_positive_int(
+        os.getenv("TELEGRAM_MEDICATION_REPEAT_WINDOW_HOURS", "12"),
+        default=12,
+        minimum=1,
+    ),
+)
 
 
 @dataclass(frozen=True)
@@ -221,7 +229,7 @@ def _parse_due_date(raw: str) -> Optional[date]:
         return None
 
 
-def _parse_due_time(raw: str, fallback: str = "14:00") -> Optional[dt_time]:
+def _parse_due_time(raw: str, fallback: str = "23:59") -> Optional[dt_time]:
     value = (raw or fallback or "").strip()
     if not value:
         return None
@@ -235,7 +243,7 @@ def _task_due_datetime(task: dict, tz: ZoneInfo) -> Optional[datetime]:
     due_day = _parse_due_date(task.get("due_date", ""))
     if not due_day:
         return None
-    due_time = _parse_due_time(task.get("due_time", ""), fallback="14:00") or dt_time(14, 0)
+    due_time = _parse_due_time(task.get("due_time", ""), fallback="23:59") or dt_time(23, 59)
     return datetime.combine(due_day, due_time, tzinfo=tz)
 
 
@@ -259,7 +267,7 @@ def _format_task_line(task: dict) -> str:
     due_time = (task.get("due_time") or "").strip()
     due_label = "bez terminu"
     if due_date:
-        due_label = f"{due_date} {due_time or '14:00'}"
+        due_label = f"{due_date} {due_time or '23:59'}"
     return f"- {task.get('name', 'bez nazwy')} [{module_name}] ({due_label})"
 
 
@@ -372,11 +380,11 @@ def _load_medication_reminders_for_date(day: date) -> list[dict]:
     return [dict(row) for row in rows if _is_medication_scheduled(row["schedule_type"], day)]
 
 
-def _build_medication_message(medication: dict, now: datetime) -> str:
+def _build_medication_message(medication: dict, dose_day: date) -> str:
     return (
         f"Lek do odhaczenia: {medication.get('name') or 'bez nazwy'}\n"
         f"Godzina: {(medication.get('reminder_time') or '08:00').strip()}\n"
-        f"Dzien: {now.date().isoformat()}\n\n"
+        f"Dzien: {dose_day.isoformat()}\n\n"
         "Odhacz w zakladce Leki. Jesli nie odhaczysz, przypomne za 5 minut."
     )
 
@@ -503,27 +511,29 @@ def _parse_schedule_time(time_raw: str) -> dt_time:
 
 
 def _process_medication_reminders(now: datetime, username: str) -> None:
-    today = now.date()
+    repeat_window = timedelta(hours=TELEGRAM_MEDICATION_REPEAT_WINDOW_HOURS)
     bucket = int(now.timestamp() // 300)
 
-    for medication in _load_medication_reminders_for_date(today):
-        if int(medication.get("done") or 0) == 1:
-            continue
-        try:
-            reminder_time = _parse_schedule_time((medication.get("reminder_time") or "08:00").strip())
-        except ValueError:
-            reminder_time = dt_time(8, 0)
+    for dose_day in [now.date(), now.date() - timedelta(days=1)]:
+        for medication in _load_medication_reminders_for_date(dose_day):
+            if int(medication.get("done") or 0) == 1:
+                continue
+            try:
+                reminder_time = _parse_schedule_time((medication.get("reminder_time") or "08:00").strip())
+            except ValueError:
+                reminder_time = dt_time(8, 0)
 
-        scheduled_at = datetime.combine(today, reminder_time, tzinfo=now.tzinfo)
-        if now < scheduled_at:
-            continue
+            scheduled_at = datetime.combine(dose_day, reminder_time, tzinfo=now.tzinfo)
+            delay = now - scheduled_at
+            if delay.total_seconds() < 0 or delay > repeat_window:
+                continue
 
-        marker_key = f"telegram-medication:{medication['id']}:{today.isoformat()}:{bucket}"
-        if not _claim_marker(marker_key):
-            continue
+            marker_key = f"telegram-medication:{medication['id']}:{dose_day.isoformat()}:{bucket}"
+            if not _claim_marker(marker_key):
+                continue
 
-        _send_to_account(username, _build_medication_message(medication, now))
-        _write_marker(marker_key)
+            _send_to_account(username, _build_medication_message(medication, dose_day))
+            _write_marker(marker_key)
 
 
 def _process_scheduled_notifications_for_account(route: TelegramAccountRoute, now: datetime, tz: ZoneInfo) -> None:
@@ -781,7 +791,7 @@ def _create_task_from_telegram(route: TelegramAccountRoute, payload: dict) -> di
     due_date = (payload.get("due_date") or "").strip()
     due_time = (payload.get("due_time") or "").strip()
     if due_date and not due_time:
-        due_time = "14:00"
+        due_time = "23:59"
 
     with get_db() as conn:
         cur = conn.execute(
@@ -892,7 +902,7 @@ def _extract_add_payload(text: str) -> tuple[Optional[str], Optional[str]]:
 def _send_added_task_confirmation(chat_id: str, created_task: dict) -> None:
     due_label = "bez terminu"
     if created_task.get("due_date"):
-        due_label = f"{created_task.get('due_date')} {created_task.get('due_time') or '14:00'}"
+        due_label = f"{created_task.get('due_date')} {created_task.get('due_time') or '23:59'}"
 
     priority_label = created_task.get("priority") or "-"
     module_created_line = "\n(Utworzono nowy modul)." if created_task.get("module_created") else ""

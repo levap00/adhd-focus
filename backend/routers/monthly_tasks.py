@@ -8,7 +8,7 @@ from backend.accounts import get_user_by_username
 from backend.auth import get_request_user
 from backend.db import get_db
 from backend.schemas import MonthlyTaskCreate, MonthlyTaskStatePayload, MonthlyTaskUpdate
-from backend.utils import normalize_month_key, parse_non_negative_int, utc_now_iso
+from backend.utils import normalize_due_time, normalize_month_key, parse_non_negative_int, utc_now_iso
 
 router = APIRouter()
 WEEK_KEY_PATTERN = re.compile(r"^week:(\d{4}-\d{2}-\d{2})$")
@@ -87,6 +87,7 @@ def get_monthly_tasks(month: str = Query(default="")):
                 mt.id,
                 mt.name,
                 COALESCE(mt.due_day, 0) AS due_day,
+                COALESCE(mt.due_time, '23:59') AS due_time,
                 COALESCE(mt.repeat_type, 'monthly') AS repeat_type,
                 COALESCE(mt.repeat_weekday, 1) AS repeat_weekday,
                 mt.created_at,
@@ -124,6 +125,7 @@ def get_monthly_tasks(month: str = Query(default="")):
         repeat_type = normalize_repeat_type(row["repeat_type"] or "monthly")
         repeat_weekday = normalize_repeat_weekday(row["repeat_weekday"])
         due_day = min(31, parse_non_negative_int(row["due_day"]))
+        due_time = normalize_due_time(row["due_time"] or "", default="23:59") or "23:59"
 
         occurrence_date_keys = get_occurrence_date_keys(
             month_key=month_key,
@@ -146,6 +148,7 @@ def get_monthly_tasks(month: str = Query(default="")):
                     "instance_id": f"{task_id}:{state_key}:{date_key or 'none'}",
                     "name": row["name"] or "",
                     "due_day": due_day,
+                    "due_time": due_time,
                     "repeat_type": repeat_type,
                     "repeat_weekday": repeat_weekday,
                     "date_key": date_key,
@@ -187,16 +190,17 @@ def add_monthly_task(payload: MonthlyTaskCreate):
         raise HTTPException(status_code=400, detail="Nazwa zadania miesiecznego nie moze byc pusta")
     repeat_type = normalize_repeat_type(payload.repeat_type)
     due_day = min(31, parse_non_negative_int(payload.due_day)) if repeat_type == "monthly" else 0
+    due_time = normalize_due_time(payload.due_time, default="23:59") or "23:59"
     repeat_weekday = normalize_repeat_weekday(payload.repeat_weekday)
 
     now = utc_now_iso()
     with get_db() as conn:
         cur = conn.execute(
             """
-            INSERT INTO monthly_tasks (name, due_day, repeat_type, repeat_weekday, owner_user_id, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO monthly_tasks (name, due_day, due_time, repeat_type, repeat_weekday, owner_user_id, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (name, due_day, repeat_type, repeat_weekday, user_id, now, now),
+            (name, due_day, due_time, repeat_type, repeat_weekday, user_id, now, now),
         )
         conn.commit()
 
@@ -204,6 +208,7 @@ def add_monthly_task(payload: MonthlyTaskCreate):
         "id": cur.lastrowid,
         "name": name,
         "due_day": due_day,
+        "due_time": due_time,
         "repeat_type": repeat_type,
         "repeat_weekday": repeat_weekday,
         "created_at": now,
@@ -219,6 +224,7 @@ def update_monthly_task(task_id: int, payload: MonthlyTaskUpdate):
         raise HTTPException(status_code=400, detail="Nazwa zadania miesiecznego nie moze byc pusta")
     repeat_type = normalize_repeat_type(payload.repeat_type)
     due_day = min(31, parse_non_negative_int(payload.due_day)) if repeat_type == "monthly" else 0
+    due_time = normalize_due_time(payload.due_time, default="23:59") or "23:59"
     repeat_weekday = normalize_repeat_weekday(payload.repeat_weekday)
 
     now = utc_now_iso()
@@ -233,10 +239,10 @@ def update_monthly_task(task_id: int, payload: MonthlyTaskUpdate):
         conn.execute(
             """
             UPDATE monthly_tasks
-            SET name = ?, due_day = ?, repeat_type = ?, repeat_weekday = ?, updated_at = ?
+            SET name = ?, due_day = ?, due_time = ?, repeat_type = ?, repeat_weekday = ?, updated_at = ?
             WHERE id = ?
             """,
-            (name, due_day, repeat_type, repeat_weekday, now, task_id),
+            (name, due_day, due_time, repeat_type, repeat_weekday, now, task_id),
         )
         conn.commit()
 
@@ -245,6 +251,7 @@ def update_monthly_task(task_id: int, payload: MonthlyTaskUpdate):
         "id": task_id,
         "name": name,
         "due_day": due_day,
+        "due_time": due_time,
         "repeat_type": repeat_type,
         "repeat_weekday": repeat_weekday,
         "updated_at": now,

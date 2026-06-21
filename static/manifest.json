@@ -1,8 +1,11 @@
 {
   "name": "ADHD Focus",
   "short_name": "Focus",
+  "id": "/",
   "display": "standalone",
+  "scope": "/",
   "start_url": "/",
+  "description": "Planer skupienia z zadaniami, notatkami, lekami i powiadomieniami.",
   "background_color": "#121212",
   "theme_color": "#121212",
   "icons": [

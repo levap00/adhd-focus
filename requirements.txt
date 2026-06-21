@@ -5,3 +5,5 @@ requests
 passlib[bcrypt]
 bcrypt<4
 slowapi
+pywebpush
+cryptography

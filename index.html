@@ -2,15 +2,15 @@
 <html lang="pl">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>ADHD Focus OS</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/app.css?v=20260520-1">
+    <link rel="stylesheet" href="/static/app.css?v=20260607-1">
     <meta name="apple-mobile-web-app-capable" content="yes">
 
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
 
     <meta name="apple-mobile-web-app-title" content="Focus">
 
@@ -18,7 +18,7 @@
 
     <link rel="manifest" href="/static/manifest.json">
     <script src="https://cdn.tailwindcss.com"></script>
-    <script defer src="/static/app.js?v=20260520-1"></script>
+    <script defer src="/static/app.js?v=20260607-1"></script>
     <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
 </head>
 <body x-data="app()" x-init="init()" @keydown.window="handleKeydown($event)" @resize.window="handleViewportResize()" @pointermove.window="moveCanvasDrag($event)" @pointerup.window="endCanvasDrag()" :class="theme === 'dark' ? 'theme-dark' : 'theme-light'">
@@ -29,34 +29,63 @@
                     <div class="min-w-0">
                         <p class="text-xs font-black uppercase tracking-[0.24em] text-emerald-700 md:text-sm">ADHD Focus</p>
                         <div class="mt-1 flex flex-wrap items-center gap-2">
-                            <h1 class="text-2xl font-black tracking-tight text-slate-900 md:text-3xl">Planer skupienia</h1>
-                            <span class="compact-pill text-sm md:text-base" x-text="formatCurrentDate()"></span>
+                            <h1 class="app-title text-2xl font-black tracking-tight text-slate-900 md:text-3xl">Planer skupienia</h1>
+                            <span class="compact-pill app-date-pill text-sm md:text-base" x-text="formatCurrentDate()"></span>
                         </div>
                     </div>
 
-                    <div class="topbar-actions flex flex-wrap gap-2">
-                        <button @click="toggleTheme()" class="rounded-xl border border-slate-300/80 bg-white/80 px-3 py-2 text-xs font-bold text-slate-600 transition-colors hover:bg-slate-100" x-text="theme === 'dark' ? 'Jasny motyw' : 'Ciemny motyw'"></button>
-                        <button @click="view = 'brain'" class="rounded-xl border border-slate-300/80 bg-white/80 px-3 py-2 text-xs font-bold text-slate-600 transition-colors hover:bg-slate-100">Brain dump</button>
-                        <button @click="openNewTaskModal()" class="rounded-xl border border-slate-300/80 bg-white/90 px-3 py-2 text-xs font-bold text-slate-700 transition-colors hover:bg-slate-100">+ Zadanie</button>
-                        <button @click="startFlow()" class="rounded-xl bg-emerald-600 px-3 py-2 text-xs font-bold text-white transition-colors hover:bg-emerald-700">Flow</button>
-                        <button @click="toggleMobileModules()" class="rounded-xl border border-slate-300/80 bg-white/90 px-3 py-2 text-xs font-bold text-slate-700 transition-colors hover:bg-slate-100 xl:hidden" x-text="mobileModulesOpen ? 'Ukryj moduly' : 'Moduly'"></button>
-                        <form method="post" action="/auth/logout">
-                            <button type="submit" class="rounded-xl border border-slate-300/80 bg-white/80 px-3 py-2 text-xs font-bold text-slate-600 transition-colors hover:bg-slate-100">Wyloguj</button>
-                        </form>
+                    <div class="topbar-actions flex items-center justify-end gap-2">
+                        <button
+                            @click="closeOverlayMenus(); openNewTaskModal(activeModule ? activeModule.id : null)"
+                            type="button"
+                            class="desktop-new-task-button"
+                        >
+                            <span aria-hidden="true">+</span>
+                            <span>Dodaj zadanie</span>
+                        </button>
+                        <div class="settings-menu" @click.outside="settingsMenuOpen = false">
+                            <button @click="settingsMenuOpen = !settingsMenuOpen; closeFab()" type="button" class="settings-icon-button" aria-label="Ustawienia" title="Ustawienia">⚙️</button>
+                            <div x-show="settingsMenuOpen" x-cloak x-transition.origin.top.right class="settings-dropdown">
+                                <button @click="toggleTheme(); settingsMenuOpen = false" type="button" class="settings-dropdown-row">
+                                    <span>Motyw</span>
+                                    <strong x-text="theme === 'dark' ? 'Jasny motyw' : 'Ciemny motyw'"></strong>
+                                </button>
+                                <div class="settings-dropdown-section">
+                                    <p class="settings-dropdown-label">Narzedzia</p>
+                                    <div class="settings-tool-grid">
+                                        <button @click="openBrainDumpAction()" type="button" class="settings-tool-btn">Brain dump</button>
+                                        <button @click="navigateUtilityView('canvas')" type="button" class="settings-tool-btn">Mapa / Canva</button>
+                                        <button @click="navigateUtilityView('docs')" type="button" class="settings-tool-btn">Dokumenty</button>
+                                        <button @click="navigateUtilityView('monthly')" type="button" class="settings-tool-btn">Miesieczne</button>
+                                        <button @click="navigateUtilityView('meds')" type="button" class="settings-tool-btn">Leki</button>
+                                        <button @click="navigateUtilityView('debts')" type="button" class="settings-tool-btn">Finanse</button>
+                                        <button @click="navigateUtilityView('notifications')" type="button" class="settings-tool-btn">Powiadomienia</button>
+                                        <button @click="closeOverlayMenus(); startFlow()" type="button" class="settings-tool-btn">Flow</button>
+                                    </div>
+                                </div>
+                                <form method="post" action="/auth/logout">
+                                    <button type="submit" class="settings-dropdown-row settings-dropdown-danger">
+                                        <span>Sesja</span>
+                                        <strong>Wyloguj</strong>
+                                    </button>
+                                </form>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
-                <nav class="topbar-view-nav mt-2 flex gap-2">
-                    <button @click="view = 'dash'" :class="view === 'dash' ? 'bg-slate-900 text-white' : 'bg-white/80 text-slate-600 border-slate-200 hover:bg-slate-50'" class="rounded-xl border px-3 py-2 text-xs font-bold transition-all">Pulpit</button>
-                    <button @click="openAllTasksView()" :class="view === 'kanban' ? 'bg-slate-900 text-white' : 'bg-white/80 text-slate-600 border-slate-200 hover:bg-slate-50'" class="rounded-xl border px-3 py-2 text-xs font-bold transition-all">Zadania</button>
-                    <button @click="view = 'global'" :class="view === 'global' ? 'bg-slate-900 text-white' : 'bg-white/80 text-slate-600 border-slate-200 hover:bg-slate-50'" class="rounded-xl border px-3 py-2 text-xs font-bold transition-all">Moduly</button>
-                    <button @click="openCalendarView()" :class="view === 'calendar' ? 'bg-slate-900 text-white' : 'bg-white/80 text-slate-600 border-slate-200 hover:bg-slate-50'" class="rounded-xl border px-3 py-2 text-xs font-bold transition-all">Kalendarz</button>
-                    <button @click="view = 'brain'" :class="view === 'brain' ? 'bg-slate-900 text-white' : 'bg-white/80 text-slate-600 border-slate-200 hover:bg-slate-50'" class="rounded-xl border px-3 py-2 text-xs font-bold transition-all">Brain dump</button>
-                    <button @click="view = 'canvas'" :class="view === 'canvas' ? 'bg-slate-900 text-white' : 'bg-white/80 text-slate-600 border-slate-200 hover:bg-slate-50'" class="rounded-xl border px-3 py-2 text-xs font-bold transition-all">Mapa</button>
-                    <button @click="view = 'docs'" :class="view === 'docs' ? 'bg-slate-900 text-white' : 'bg-white/80 text-slate-600 border-slate-200 hover:bg-slate-50'" class="rounded-xl border px-3 py-2 text-xs font-bold transition-all">Dokumenty</button>
-                    <button @click="view = 'monthly'" :class="view === 'monthly' ? 'bg-slate-900 text-white' : 'bg-white/80 text-slate-600 border-slate-200 hover:bg-slate-50'" class="rounded-xl border px-3 py-2 text-xs font-bold transition-all">Miesieczne</button>
-                    <button @click="view = 'meds'" :class="view === 'meds' ? 'bg-slate-900 text-white' : 'bg-white/80 text-slate-600 border-slate-200 hover:bg-slate-50'" class="rounded-xl border px-3 py-2 text-xs font-bold transition-all">Leki</button>
-                    <button @click="view = 'debts'" :class="view === 'debts' ? 'bg-slate-900 text-white' : 'bg-white/80 text-slate-600 border-slate-200 hover:bg-slate-50'" class="rounded-xl border px-3 py-2 text-xs font-bold transition-all">Finanse</button>
+                <nav class="desktop-view-nav">
+                    <button @click="navigateMainView('dash')" :class="view === 'dash' ? 'is-active' : ''" type="button">Pulpit</button>
+                    <button @click="navigateMainView('kanban')" :class="view === 'kanban' ? 'is-active' : ''" type="button">Zadania</button>
+                    <button @click="navigateMainView('global')" :class="view === 'global' ? 'is-active' : ''" type="button">Moduly</button>
+                    <button @click="navigateMainView('calendar')" :class="view === 'calendar' ? 'is-active' : ''" type="button">Kalendarz</button>
+                    <button @click="navigateUtilityView('brain')" :class="view === 'brain' ? 'is-active' : ''" type="button">Brain dump</button>
+                    <button @click="navigateUtilityView('canvas')" :class="view === 'canvas' ? 'is-active' : ''" type="button">Mapa</button>
+                    <button @click="navigateUtilityView('docs')" :class="view === 'docs' ? 'is-active' : ''" type="button">Dokumenty</button>
+                    <button @click="navigateUtilityView('monthly')" :class="view === 'monthly' ? 'is-active' : ''" type="button">Miesieczne</button>
+                    <button @click="navigateUtilityView('meds')" :class="view === 'meds' ? 'is-active' : ''" type="button">Leki</button>
+                    <button @click="navigateUtilityView('debts')" :class="view === 'debts' ? 'is-active' : ''" type="button">Finanse</button>
+                    <button @click="closeOverlayMenus(); startFlow()" :class="view === 'flow' ? 'is-active' : ''" type="button">Flow</button>
                 </nav>
 
                 <div class="topbar-progress mt-2">
@@ -181,59 +210,59 @@
             <main class="mobile-main-shell order-1 min-w-0 flex-1 xl:order-2">
                 <template x-if="view === 'dash'">
                     <div x-cloak class="space-y-6">
-                        <section class="card p-5 md:p-6">
-                            <div class="mb-4 flex flex-wrap items-end justify-between gap-4">
+                        <section class="card dashboard-summary-card p-5 md:p-6">
+                            <div class="dashboard-summary-head mb-4 flex flex-wrap items-end justify-between gap-4">
                                 <div>
                                     <p class="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400">Pulpit</p>
-                                    <h2 class="mt-1 text-3xl font-black tracking-tight text-slate-900">Szybki obraz dnia</h2>
+                                    <h2 class="dashboard-summary-title mt-1 text-3xl font-black tracking-tight text-slate-900">Szybki obraz dnia</h2>
                                 </div>
                                 <button @click="openAllTasksView()" class="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-bold text-white transition-colors hover:bg-slate-800">Otworz zadania</button>
                             </div>
-                            <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-                                <div class="rounded-[20px] bg-red-50 px-4 py-4">
-                                    <div class="text-2xl font-black text-red-600" x-text="getUrgentOpenCount()"></div>
-                                    <div class="mt-1 text-[10px] font-black uppercase tracking-[0.16em] text-red-600/80">Pilne</div>
+                            <div class="dashboard-kpi-grid grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+                                <div class="dashboard-kpi-item rounded-[20px] bg-red-50 px-4 py-4">
+                                    <div class="dashboard-kpi-value text-2xl font-black text-red-600" x-text="getUrgentOpenCount()"></div>
+                                    <div class="dashboard-kpi-label mt-1 text-[10px] font-black uppercase tracking-[0.16em] text-red-600/80">Pilne</div>
                                 </div>
-                                <div class="rounded-[20px] bg-cyan-50 px-4 py-4">
-                                    <div class="text-2xl font-black text-cyan-700" x-text="getInProgressCount()"></div>
-                                    <div class="mt-1 text-[10px] font-black uppercase tracking-[0.16em] text-cyan-700/80">W trakcie</div>
+                                <div class="dashboard-kpi-item rounded-[20px] bg-cyan-50 px-4 py-4">
+                                    <div class="dashboard-kpi-value text-2xl font-black text-cyan-700" x-text="getInProgressCount()"></div>
+                                    <div class="dashboard-kpi-label mt-1 text-[10px] font-black uppercase tracking-[0.16em] text-cyan-700/80">W trakcie</div>
                                 </div>
-                                <div class="rounded-[20px] bg-amber-50 px-4 py-4">
-                                    <div class="text-2xl font-black text-amber-700" x-text="getPreparationCount()"></div>
-                                    <div class="mt-1 text-[10px] font-black uppercase tracking-[0.16em] text-amber-700/80">Review / Hold</div>
+                                <div class="dashboard-kpi-item rounded-[20px] bg-amber-50 px-4 py-4">
+                                    <div class="dashboard-kpi-value text-2xl font-black text-amber-700" x-text="getPreparationCount()"></div>
+                                    <div class="dashboard-kpi-label mt-1 text-[10px] font-black uppercase tracking-[0.16em] text-amber-700/80">Review / Hold</div>
                                 </div>
-                                <div class="rounded-[20px] bg-emerald-50 px-4 py-4">
-                                    <div class="text-2xl font-black text-emerald-700" x-text="getPlannedTodayCount()"></div>
-                                    <div class="mt-1 text-[10px] font-black uppercase tracking-[0.16em] text-emerald-700/80">Na dzis</div>
+                                <div class="dashboard-kpi-item rounded-[20px] bg-emerald-50 px-4 py-4">
+                                    <div class="dashboard-kpi-value text-2xl font-black text-emerald-700" x-text="getPlannedTodayCount()"></div>
+                                    <div class="dashboard-kpi-label mt-1 text-[10px] font-black uppercase tracking-[0.16em] text-emerald-700/80">Na dzis</div>
                                 </div>
-                                <div class="rounded-[20px] bg-slate-100 px-4 py-4">
-                                    <div class="text-2xl font-black text-slate-800" x-text="getPlannedUpcomingCount()"></div>
-                                    <div class="mt-1 text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">7 dni</div>
+                                <div class="dashboard-kpi-item rounded-[20px] bg-slate-100 px-4 py-4">
+                                    <div class="dashboard-kpi-value text-2xl font-black text-slate-800" x-text="getPlannedUpcomingCount()"></div>
+                                    <div class="dashboard-kpi-label mt-1 text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">7 dni</div>
                                 </div>
                             </div>
                         </section>
 
-                        <section class="card focus-hero p-6 md:p-7">
-                            <div class="flex flex-wrap items-start justify-between gap-4">
+                        <section class="card focus-hero dashboard-focus-card p-6 md:p-7">
+                            <div class="dashboard-focus-head flex flex-wrap items-start justify-between gap-4">
                                 <div>
                                     <p class="text-[11px] font-black uppercase tracking-[0.22em] text-emerald-700">Zacznij od tego</p>
-                                    <h2 class="mt-2 text-3xl font-black tracking-tight text-slate-900">Jedna rzecz na teraz</h2>
-                                    <p class="mt-2 max-w-2xl text-sm leading-7 text-slate-500">Kiedy czujesz za duzo, nie wybieraj z calej listy. Zacznij od jednej rzeczy, ktora najbardziej odblokowuje dzien.</p>
+                                    <h2 class="dashboard-focus-heading mt-2 text-3xl font-black tracking-tight text-slate-900">Jedna rzecz na teraz</h2>
+                                    <p class="dashboard-focus-copy mt-2 max-w-2xl text-sm leading-7 text-slate-500">Kiedy czujesz za duzo, nie wybieraj z calej listy. Zacznij od jednej rzeczy, ktora najbardziej odblokowuje dzien.</p>
                                 </div>
                                 <button @click="startFlow()" class="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-bold text-white transition-colors hover:bg-slate-800">Odpal focus timer</button>
                             </div>
 
                             <template x-if="getFocusTask()">
-                                <div class="mt-6">
-                                    <div class="mb-4 flex flex-wrap gap-2">
+                                <div class="dashboard-focus-content mt-6">
+                                    <div class="dashboard-focus-badges mb-4 flex flex-wrap gap-2">
                                         <span :class="getModuleTheme(getFocusTask().module_id).badge" class="rounded-full border px-3 py-1 text-xs font-bold" x-text="getModuleName(getFocusTask().module_id)"></span>
                                         <span x-show="hasPriority(getFocusTask())" x-cloak :class="getPriorityBadgeClass(getFocusTask().priority)" class="rounded-full px-3 py-1 text-xs font-bold" x-text="getPriorityLabel(getFocusTask().priority)"></span>
                                         <span x-show="getTaskUrgencyLabel(getFocusTask())" x-cloak :class="getUrgencyClass(getFocusTask())" class="rounded-full px-3 py-1 text-xs font-bold" x-text="getTaskUrgencyLabel(getFocusTask())"></span>
                                         <span class="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-500" x-text="getTaskTimeLabel(getFocusTask())"></span>
                                     </div>
-                                    <h3 class="max-w-3xl text-3xl font-black leading-tight text-slate-900" x-text="getFocusTask().name"></h3>
-                                    <p class="mt-4 max-w-2xl text-sm leading-7 text-slate-600" x-text="getFocusCoach(getFocusTask())"></p>
-                                    <div class="mt-6 flex flex-wrap gap-3">
+                                    <h3 class="dashboard-focus-title max-w-3xl text-3xl font-black leading-tight text-slate-900" x-text="getFocusTask().name"></h3>
+                                    <p class="dashboard-focus-coach mt-4 max-w-2xl text-sm leading-7 text-slate-600" x-text="getFocusCoach(getFocusTask())"></p>
+                                    <div class="dashboard-focus-actions mt-6 flex flex-wrap gap-3">
                                         <button @click="kickTaskOff(getFocusTask())" class="rounded-2xl bg-emerald-600 px-5 py-3 text-sm font-bold text-white shadow-[0_12px_24px_rgba(5,150,105,0.22)] transition-colors hover:bg-emerald-700" x-text="getFocusTask().status === 'todo' ? 'Otworz zadanie' : 'Wrzuc do TODO i otworz'"></button>
                                         <button @click="goToTask(getFocusTask())" class="rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-bold text-slate-600 transition-colors hover:bg-slate-50">Pokaz modul</button>
                                     </div>
@@ -248,17 +277,17 @@
                         </section>
 
                         <div class="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
-                            <section class="card p-5 md:p-6">
-                                <div class="mb-5 flex flex-wrap items-end justify-between gap-4">
+                            <section class="card dashboard-radar-card p-5 md:p-6">
+                                <div class="dashboard-section-head mb-5 flex flex-wrap items-end justify-between gap-4">
                                     <div>
                                         <p class="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400">Na radarze</p>
-                                        <h3 class="mt-1 text-2xl font-black text-slate-900">Pilne terminy i rzeczy, ktore wisza</h3>
+                                        <h3 class="dashboard-section-title mt-1 text-2xl font-black text-slate-900">Pilne terminy i rzeczy, ktore wisza</h3>
                                     </div>
                                     <button @click="openCalendarView()" class="rounded-2xl bg-slate-100 px-4 py-2.5 text-sm font-bold text-slate-600 transition-colors hover:bg-slate-200">Otworz kalendarz</button>
                                 </div>
-                                <div class="grid gap-3 md:grid-cols-2">
+                                <div class="dashboard-urgent-grid grid gap-3 md:grid-cols-2">
                                     <template x-for="task in getUrgentTasks(4)" :key="task.id">
-                                        <div class="rounded-[24px] border border-slate-200 bg-slate-50/80 p-4">
+                                        <div class="dashboard-urgent-item rounded-[24px] border border-slate-200 bg-slate-50/80 p-4">
                                             <div class="flex flex-wrap items-center gap-2">
                                                 <span :class="getModuleTheme(task.module_id).badge" class="rounded-full border px-2.5 py-1 text-[11px] font-bold" x-text="getModuleName(task.module_id)"></span>
                                                 <span x-show="getTaskUrgencyLabel(task)" x-cloak :class="getUrgencyClass(task)" class="rounded-full px-2.5 py-1 text-[11px] font-bold" x-text="getTaskUrgencyLabel(task)"></span>
@@ -282,26 +311,26 @@
                                 </div>
                             </section>
 
-                            <section class="card p-5 md:p-6">
-                                <div class="mb-5 flex flex-wrap items-end justify-between gap-4">
+                            <section class="card dashboard-brain-card p-5 md:p-6">
+                                <div class="dashboard-section-head mb-5 flex flex-wrap items-end justify-between gap-4">
                                     <div>
                                         <p class="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400">Brain dump</p>
-                                        <h3 class="mt-1 text-2xl font-black text-slate-900">Wyrzuc wszystko z glowy</h3>
+                                        <h3 class="dashboard-section-title mt-1 text-2xl font-black text-slate-900">Wyrzuc wszystko z glowy</h3>
                                     </div>
                                     <button @click="view = 'brain'" class="rounded-2xl bg-slate-100 px-4 py-2.5 text-sm font-bold text-slate-600 transition-colors hover:bg-slate-200">Pelny widok</button>
                                 </div>
 
-                                <div class="rounded-[24px] border border-slate-200 bg-slate-50/80 p-4">
+                                <div class="dashboard-brain-preview rounded-[24px] border border-slate-200 bg-slate-50/80 p-4">
                                     <p class="text-sm leading-7 text-slate-600" x-text="getBrainDumpPreview()"></p>
                                 </div>
 
-                                <div class="mt-4 grid gap-3 md:grid-cols-2">
-                                    <div class="rounded-[22px] bg-emerald-50 px-4 py-4">
-                                        <div class="text-2xl font-black text-emerald-700" x-text="countBrainDumpLines()"></div>
-                                        <div class="mt-1 text-xs font-bold uppercase tracking-[0.18em] text-emerald-700/80">linii do zrzutu</div>
+                                <div class="dashboard-brain-stats mt-4 grid gap-3 md:grid-cols-2">
+                                    <div class="dashboard-brain-stat rounded-[22px] bg-emerald-50 px-4 py-4">
+                                        <div class="text-2xl font-black text-emerald-700" x-text="brainDumpNotes.length"></div>
+                                        <div class="mt-1 text-xs font-bold uppercase tracking-[0.18em] text-emerald-700/80">notatki</div>
                                     </div>
-                                    <div class="rounded-[22px] bg-slate-100 px-4 py-4">
-                                        <div class="text-2xl font-black text-slate-700" x-text="noteSavedAt ? formatNoteTimestamp(noteSavedAt) : 'brak'"></div>
+                                    <div class="dashboard-brain-stat rounded-[22px] bg-slate-100 px-4 py-4">
+                                        <div class="text-2xl font-black text-slate-700" x-text="getBrainDumpLastSavedAt() ? formatNoteTimestamp(getBrainDumpLastSavedAt()) : 'brak'"></div>
                                         <div class="mt-1 text-xs font-bold uppercase tracking-[0.18em] text-slate-500">ostatni zapis</div>
                                     </div>
                                 </div>
@@ -319,64 +348,63 @@
 
                             <div class="grid gap-4 lg:grid-cols-2 2xl:grid-cols-3">
                                 <template x-for="module in getModulesSortedByWorkload()" :key="module.id">
-                                    <div :class="isModuleMuted(module.id) ? 'module-muted' : ''" class="card soft-panel p-5">
-                                        <div class="flex items-start justify-between gap-3">
-                                            <div class="min-w-0">
-                                                <div class="flex items-center gap-2">
-                                                    <span :class="getModuleTheme(module.id).dot" class="h-2.5 w-2.5 rounded-full"></span>
-                                                    <h4 class="module-name-wrap text-lg font-black text-slate-900" x-text="module.name"></h4>
-                                                    <span class="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[10px] font-bold text-slate-500" x-text="getModuleCategoryLabel(module.category)"></span>
-                                                    <span x-show="isModuleMuted(module.id)" x-cloak class="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-500">wyciszony</span>
-                                                </div>
-                                                <p class="mt-2 text-xs text-slate-500">
-                                                    <span x-text="getModuleOpenCount(module.id)"></span>
-                                                    <span>otwarte</span>
-                                                    <span class="mx-1">•</span>
-                                                    <span x-text="getModuleTodoCount(module.id)"></span>
-                                                    <span>w toku</span>
-                                                </p>
+                                    <details :class="isModuleMuted(module.id) ? 'module-muted' : ''" class="module-accordion soft-panel">
+                                        <summary class="module-accordion-summary">
+                                            <div class="module-accordion-title">
+                                                <span :class="getModuleTheme(module.id).dot" class="h-2.5 w-2.5 shrink-0 rounded-full"></span>
+                                                <span class="module-name-wrap font-black text-slate-900" x-text="module.name"></span>
                                             </div>
-                                            <span :class="getModuleTheme(module.id).badge" class="rounded-full border px-3 py-1.5 text-xs font-bold" x-text="Math.round(module.progress || 0) + '%'"></span>
-                                        </div>
+                                            <div class="module-accordion-meta">
+                                                <span class="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[10px] font-bold text-slate-500" x-text="getModuleCategoryLabel(module.category)"></span>
+                                                <span class="text-[11px] font-bold text-slate-500">
+                                                    <span x-text="getModuleOpenCount(module.id)"></span>
+                                                    <span>otw.</span>
+                                                </span>
+                                                <span :class="getModuleTheme(module.id).badge" class="rounded-full border px-2.5 py-1 text-[11px] font-bold" x-text="Math.round(module.progress || 0) + '%'"></span>
+                                                <span class="module-accordion-chevron">⌄</span>
+                                            </div>
+                                        </summary>
 
-                                        <div class="mt-4 h-2 overflow-hidden rounded-full bg-slate-100">
-                                            <div class="h-full rounded-full transition-all duration-500" :class="getModuleTheme(module.id).bar" :style="`width: ${module.progress || 0}%`"></div>
-                                        </div>
+                                        <div class="module-accordion-body">
+                                            <div class="h-2 overflow-hidden rounded-full bg-slate-100">
+                                                <div class="h-full rounded-full transition-all duration-500" :class="getModuleTheme(module.id).bar" :style="`width: ${module.progress || 0}%`"></div>
+                                            </div>
 
-                                        <div x-show="!isModuleMuted(module.id)" x-cloak>
-                                        <textarea :value="getModuleNote(module.id)" @input="setModuleNote(module.id, $event.target.value)" rows="2" class="mt-4 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm leading-6 text-slate-700 outline-none transition-colors focus:border-emerald-300" placeholder="Notatki do modulu"></textarea>
+                                            <div x-show="!isModuleMuted(module.id)" x-cloak>
+                                                <textarea :value="getModuleNote(module.id)" @input="setModuleNote(module.id, $event.target.value)" rows="2" class="mt-4 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm leading-6 text-slate-700 outline-none transition-colors focus:border-emerald-300" placeholder="Notatki do modulu"></textarea>
 
-                                        <div class="mt-4 space-y-2">
-                                            <template x-for="task in getModulePreviewTasks(module.id, 3)" :key="task.id">
-                                                <button @click="openTaskModal(task)" :class="`priority-${task.priority}`" class="flex w-full items-start justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-3 py-3 text-left transition-colors hover:bg-slate-50">
-                                                    <div class="min-w-0">
-                                                        <div class="flex min-w-0 flex-wrap items-center gap-1.5">
-                                                            <span class="truncate text-sm font-bold text-slate-800" x-text="task.name"></span>
-                                                            <span x-show="isTaskShared(task)" x-cloak class="shared-task-badge shared-task-badge-compact" x-text="getTaskSharedLabel(task)"></span>
+                                                <div class="mt-4 space-y-2">
+                                                    <template x-for="task in getModulePreviewTasks(module.id, 3)" :key="task.id">
+                                                        <button @click="openTaskModal(task)" :class="`priority-${task.priority}`" class="flex w-full items-start justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-3 py-3 text-left transition-colors hover:bg-slate-50">
+                                                            <div class="min-w-0">
+                                                                <div class="flex min-w-0 flex-wrap items-center gap-1.5">
+                                                                    <span class="truncate text-sm font-bold text-slate-800" x-text="task.name"></span>
+                                                                    <span x-show="isTaskShared(task)" x-cloak class="shared-task-badge shared-task-badge-compact" x-text="getTaskSharedLabel(task)"></span>
+                                                                </div>
+                                                                <div x-show="getTaskDescriptionPreview(task)" x-cloak class="mt-1 text-[11px] leading-4 text-slate-600" x-text="getTaskDescriptionPreview(task)"></div>
+                                                                <div class="mt-1 text-[11px] text-slate-500">
+                                                                    <span x-text="getStatusLabel(task.status)"></span>
+                                                                    <span class="mx-1">•</span>
+                                                                    <span x-text="getTaskTimeLabel(task)"></span>
+                                                                </div>
+                                                            </div>
+                                                            <span x-show="getTaskUrgencyLabel(task)" x-cloak :class="getUrgencyClass(task)" class="rounded-full px-2.5 py-1 text-[11px] font-bold" x-text="getTaskUrgencyLabel(task)"></span>
+                                                        </button>
+                                                    </template>
+                                                    <template x-if="getModulePreviewTasks(module.id, 3).length === 0">
+                                                        <div class="rounded-[22px] border border-dashed border-slate-200 px-4 py-6 text-center text-sm text-slate-400">
+                                                            Tu jest spokojnie. Mozesz odetchnac.
                                                         </div>
-                                                        <div x-show="getTaskDescriptionPreview(task)" x-cloak class="mt-1 text-[11px] leading-4 text-slate-600" x-text="getTaskDescriptionPreview(task)"></div>
-                                                        <div class="mt-1 text-[11px] text-slate-500">
-                                                            <span x-text="getStatusLabel(task.status)"></span>
-                                                            <span class="mx-1">•</span>
-                                                            <span x-text="getTaskTimeLabel(task)"></span>
-                                                        </div>
-                                                    </div>
-                                                    <span x-show="getTaskUrgencyLabel(task)" x-cloak :class="getUrgencyClass(task)" class="rounded-full px-2.5 py-1 text-[11px] font-bold" x-text="getTaskUrgencyLabel(task)"></span>
-                                                </button>
-                                            </template>
-                                            <template x-if="getModulePreviewTasks(module.id, 3).length === 0">
-                                                <div class="rounded-[22px] border border-dashed border-slate-200 px-4 py-6 text-center text-sm text-slate-400">
-                                                    Tu jest spokojnie. Mozesz odetchnac.
+                                                    </template>
                                                 </div>
-                                            </template>
-                                        </div>
-                                        </div>
+                                            </div>
 
-                                        <div class="mt-4 grid grid-cols-[1fr_auto] gap-2">
-                                            <button @click="openModule(module)" class="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-bold text-white transition-colors hover:bg-slate-800">Otworz modul</button>
-                                            <button @click="toggleModuleMuted(module.id)" class="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-500 transition-colors hover:bg-slate-50" x-text="isModuleMuted(module.id) ? 'Pokaz' : 'Wycisz'"></button>
+                                            <div class="mt-4 grid grid-cols-[1fr_auto] gap-2">
+                                                <button @click="openModule(module)" class="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-bold text-white transition-colors hover:bg-slate-800">Otworz modul</button>
+                                                <button @click="toggleModuleMuted(module.id)" class="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-500 transition-colors hover:bg-slate-50" x-text="isModuleMuted(module.id) ? 'Pokaz' : 'Wycisz'"></button>
+                                            </div>
                                         </div>
-                                    </div>
+                                    </details>
                                 </template>
 
                                 <template x-if="modules.length === 0">
@@ -415,31 +443,33 @@
                         </section>
 
                         <template x-for="module in getGlobalModules()" :key="module.id">
-                            <section :class="isModuleMuted(module.id) ? 'module-muted' : ''" class="card p-5">
-                                <div class="flex flex-wrap items-start justify-between gap-4">
-                                    <div class="min-w-0">
-                                        <div class="flex flex-wrap items-center gap-2">
-                                            <span :class="getModuleTheme(module.id).dot" class="h-3 w-3 rounded-full"></span>
-                                            <h3 class="module-name-wrap text-2xl font-black text-slate-900" x-text="module.name"></h3>
-                                            <span :class="getModuleTheme(module.id).badge" class="rounded-full border px-3 py-1 text-xs font-bold" x-text="getModuleVisibleCount(module.id) + ' widocznych'"></span>
-                                            <span class="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[10px] font-bold text-slate-500" x-text="getModuleCategoryLabel(module.category)"></span>
-                                            <span x-show="isModuleMuted(module.id)" x-cloak class="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-500">wyciszony</span>
-                                        </div>
-                                        <p class="mt-2 text-sm text-slate-500">
-                                            <span x-text="getModuleOpenCount(module.id)"></span>
-                                            <span>otwartych</span>
-                                            <span class="mx-1">•</span>
-                                            <span x-text="getModuleUrgentCount(module.id)"></span>
-                                            <span>pilnych</span>
-                                        </p>
+                            <details :class="isModuleMuted(module.id) ? 'module-muted' : ''" class="module-accordion module-kanban-accordion">
+                                <summary class="module-accordion-summary">
+                                    <div class="module-accordion-title">
+                                        <span :class="getModuleTheme(module.id).dot" class="h-3 w-3 shrink-0 rounded-full"></span>
+                                        <span class="module-name-wrap font-black text-slate-900" x-text="module.name"></span>
                                     </div>
+                                    <div class="module-accordion-meta">
+                                        <span :class="getModuleTheme(module.id).badge" class="rounded-full border px-2.5 py-1 text-[11px] font-bold" x-text="getModuleVisibleCount(module.id) + ' wid.'"></span>
+                                        <span class="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[10px] font-bold text-slate-500" x-text="getModuleCategoryLabel(module.category)"></span>
+                                        <span x-show="isModuleMuted(module.id)" x-cloak class="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-500">wyciszony</span>
+                                        <span class="text-[11px] font-bold text-slate-500">
+                                            <span x-text="getModuleOpenCount(module.id)"></span>
+                                            <span>otw.</span>
+                                            <span class="mx-0.5">•</span>
+                                            <span x-text="getModuleUrgentCount(module.id)"></span>
+                                            <span>pil.</span>
+                                        </span>
+                                        <span class="module-accordion-chevron">⌄</span>
+                                    </div>
+                                </summary>
 
-                                    <div class="flex flex-wrap gap-2">
+                                <div class="module-accordion-body">
+                                    <div class="module-accordion-actions">
                                         <button @click="toggleModuleMuted(module.id)" class="rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-500 transition-colors hover:bg-slate-50" x-text="isModuleMuted(module.id) ? 'Odcisz' : 'Wycisz'"></button>
                                         <button @click="toggleGlobalLane(module.id)" class="rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-500 transition-colors hover:bg-slate-50" x-text="isGlobalLaneCollapsed(module.id) ? 'Pokaz kolumny' : 'Zwin modul'"></button>
                                         <button @click="openModule(module)" class="rounded-2xl bg-slate-900 px-4 py-2.5 text-sm font-bold text-white transition-colors hover:bg-slate-800">Otworz modul</button>
                                     </div>
-                                </div>
 
                                 <template x-if="!isModuleMuted(module.id) && !isGlobalLaneCollapsed(module.id)">
                                     <div class="mt-5 grid gap-3 xl:grid-cols-4">
@@ -503,7 +533,8 @@
                                 <div x-show="!isModuleMuted(module.id)" x-cloak class="mt-4">
                                     <textarea :value="getModuleNote(module.id)" @input="setModuleNote(module.id, $event.target.value)" rows="2" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm leading-6 text-slate-700 outline-none transition-colors focus:border-emerald-300" placeholder="Notatki do modulu"></textarea>
                                 </div>
-                            </section>
+                                </div>
+                            </details>
                         </template>
 
                         <template x-if="getGlobalModules().length === 0">
@@ -541,7 +572,6 @@
                                         <button @click="setFocusFilter('all')" :class="focusFilter === 'all' ? 'bg-slate-900 text-white' : 'text-slate-500'" class="rounded-lg px-2.5 py-1.5 transition-all">Pelny</button>
                                         <button @click="setFocusFilter('now')" :class="focusFilter === 'now' ? 'bg-emerald-600 text-white' : 'text-slate-500'" class="rounded-lg px-2.5 py-1.5 transition-all">Tylko teraz</button>
                                     </div>
-                                    <button @click="openNewTaskModal(activeModule ? activeModule.id : null)" class="rounded-xl border border-emerald-200 bg-white px-3 py-2 text-xs font-bold text-emerald-700 transition-colors hover:bg-emerald-50">+ Zadanie</button>
                                 </div>
                             </div>
 
@@ -751,21 +781,23 @@
 
                                                             <template x-for="entry in day.timelineEntries" :key="'timeline-entry-' + entry.id">
                                                                 <button
-                                                                    @click="openTaskModal(entry.item)"
-                                                                    :class="`calendar-timeline-task priority-${entry.item.priority} ${getCalendarTaskStateClass(entry)} ${getCalendarTimelineTaskDensityClass(entry)}`"
+                                                                    @click="entry.type === 'monthly' ? openMonthlyTaskModal(entry.item) : openTaskModal(entry.item)"
+                                                                    :class="`calendar-timeline-task ${entry.type === 'monthly' ? 'calendar-timeline-monthly' : ('priority-' + entry.item.priority)} ${entry.type === 'monthly' && entry.done ? 'calendar-timeline-monthly-done' : getCalendarTaskStateClass(entry)} ${getCalendarTimelineTaskDensityClass(entry)}`"
                                                                     :style="getCalendarTimelineEntryStyle(entry, day)"
                                                                     type="button"
                                                                 >
                                                                     <div class="calendar-timeline-task-time" x-text="getCalendarTimelineTimeRangeLabel(entry)"></div>
                                                                     <div class="calendar-timeline-task-title">
-                                                                        <span x-text="entry.item.name"></span>
-                                                                        <span x-show="isTaskShared(entry.item)" x-cloak class="shared-task-badge shared-task-badge-calendar" x-text="getTaskSharedLabel(entry.item)"></span>
+                                                                        <span :class="entry.type === 'monthly' && entry.done ? 'line-through opacity-65' : ''" x-text="entry.item.name"></span>
+                                                                        <span x-show="entry.type === 'task' && isTaskShared(entry.item)" x-cloak class="shared-task-badge shared-task-badge-calendar" x-text="getTaskSharedLabel(entry.item)"></span>
                                                                     </div>
                                                                     <div class="calendar-timeline-task-meta">
-                                                                        <span class="calendar-timeline-task-module" x-text="getModuleName(entry.item.module_id)"></span>
-                                                                        <span x-show="getCalendarCarryOverLabel(entry)" x-cloak class="calendar-timeline-task-carry" x-text="getCalendarCarryOverLabel(entry)"></span>
-                                                                        <span :class="getCalendarTaskUrgencyClass(entry)" class="calendar-entry-urgency" x-text="getCalendarTaskUrgencyLabel(entry)"></span>
-                                                                        <span :class="getCalendarTaskStatusClass(entry)" class="calendar-entry-status" x-text="getCalendarTaskStatusLabel(entry)"></span>
+                                                                        <span x-show="entry.type === 'task'" class="calendar-timeline-task-module" x-text="getModuleName(entry.item.module_id)"></span>
+                                                                        <span x-show="entry.type === 'monthly'" class="calendar-timeline-task-module">Miesieczne</span>
+                                                                        <span x-show="entry.type === 'task' && getCalendarCarryOverLabel(entry)" x-cloak class="calendar-timeline-task-carry" x-text="getCalendarCarryOverLabel(entry)"></span>
+                                                                        <span x-show="entry.type === 'task'" :class="getCalendarTaskUrgencyClass(entry)" class="calendar-entry-urgency" x-text="getCalendarTaskUrgencyLabel(entry)"></span>
+                                                                        <span x-show="entry.type === 'task'" :class="getCalendarTaskStatusClass(entry)" class="calendar-entry-status" x-text="getCalendarTaskStatusLabel(entry)"></span>
+                                                                        <span x-show="entry.type === 'monthly'" :class="entry.done ? 'calendar-entry-status-todo' : 'calendar-entry-status-waiting'" class="calendar-entry-status" x-text="entry.done ? 'zrobione' : 'mies.'"></span>
                                                                     </div>
                                                                 </button>
                                                             </template>
@@ -855,13 +887,17 @@
                                                             <span :class="getCalendarTaskStatusClass(entry)" class="calendar-entry-status calendar-entry-status-compact" x-text="getCalendarTaskStatusLabel(entry)"></span>
                                                         </button>
 
-                                                        <label
+                                                        <button
                                                             x-show="entry.type === 'monthly'"
+                                                            @click.stop="openMonthlyTaskModal(entry.item)"
                                                             class="calendar-entry calendar-entry-monthly"
+                                                            type="button"
                                                         >
-                                                            <span class="calendar-entry-time">M</span>
-                                                            <span class="calendar-entry-title" x-text="entry.item.name"></span>
-                                                        </label>
+                                                            <span class="calendar-entry-time" x-text="getCalendarEntryTime(entry)"></span>
+                                                            <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-cyan-500"></span>
+                                                            <span class="calendar-entry-title" :class="entry.done ? 'line-through opacity-65' : ''" x-text="entry.item.name"></span>
+                                                            <span :class="entry.done ? 'calendar-entry-status-todo' : 'calendar-entry-status-waiting'" class="calendar-entry-status calendar-entry-status-compact" x-text="entry.done ? 'zrobione' : 'mies.'"></span>
+                                                        </button>
 
                                                         <label
                                                             x-show="entry.type === 'debt'"
@@ -887,27 +923,55 @@
                             <div class="flex flex-wrap items-start justify-between gap-4">
                                 <div>
                                     <p class="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400">Brain dump</p>
-                                    <h2 class="mt-1 text-3xl font-black tracking-tight text-slate-900">Najpierw wyrzuc wszystko z glowy, potem dopiero planuj</h2>
-                                    <p class="mt-2 max-w-3xl text-sm leading-7 text-slate-500">To miejsce jest specjalnie po to, zeby nie musiec trzymac wszystkiego w pamieci roboczej. Najpierw zrzut, potem selekcja.</p>
+                                    <h2 class="mt-1 text-3xl font-black tracking-tight text-slate-900">Notatnik na szybkie zrzuty mysli</h2>
+                                    <p class="mt-2 max-w-3xl text-sm leading-7 text-slate-500">Kazdy zrzut moze byc osobna notatka. Latwiej wrocic, przerobic i nie hodowac jednego nieskonczonego dokumentu.</p>
                                 </div>
                                 <div class="flex flex-wrap gap-2">
+                                    <button @click="createEmptyBrainDumpNote()" class="rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-bold text-white transition-colors hover:bg-emerald-700">+ Nowa notatka</button>
                                     <button @click="saveBrainDump()" class="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-bold text-white transition-colors hover:bg-slate-800">Zapisz</button>
                                     <button @click="view = 'dash'" class="rounded-2xl bg-slate-100 px-4 py-3 text-sm font-bold text-slate-600 transition-colors hover:bg-slate-200">Wroc do fokusu</button>
                                 </div>
                             </div>
                         </section>
 
-                        <div class="grid gap-6 xl:grid-cols-[1.25fr_0.75fr]">
+                        <div class="grid gap-6 xl:grid-cols-[320px_minmax(0,1fr)_0.65fr]">
                             <section class="card p-5 md:p-6">
                                 <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
                                     <div>
-                                        <p class="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400">Notatka</p>
-                                        <h3 class="mt-1 text-2xl font-black text-slate-900">Wrzuc wszystko, co lata po glowie</h3>
+                                        <p class="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400">Notatki</p>
+                                        <h3 class="mt-1 text-2xl font-black text-slate-900">Zrzuty</h3>
                                     </div>
-                                    <span class="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-500" x-text="countBrainDumpLines() + ' linii'"></span>
+                                    <span class="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-500" x-text="brainDumpNotes.length + ' szt.'"></span>
                                 </div>
 
-                                <textarea x-model="brainDump" @input="handleBrainDumpInput()" rows="18" class="w-full rounded-[28px] border border-slate-200 bg-slate-50 p-5 text-sm leading-7 text-slate-700 outline-none transition-colors focus:border-emerald-300 focus:bg-white" placeholder="Np.
+                                <div class="space-y-2">
+                                    <template x-for="note in brainDumpNotes" :key="note.id">
+                                        <button @click="selectBrainDumpNote(note.id)" :class="Number(activeBrainDumpNoteId) === Number(note.id) ? 'border-emerald-200 bg-emerald-50' : 'border-slate-200 bg-slate-50 hover:bg-white'" class="w-full rounded-2xl border px-3 py-3 text-left transition-colors">
+                                            <div class="truncate text-sm font-black text-slate-900" x-text="note.title || 'Nowa notatka'"></div>
+                                            <div class="mt-1 line-clamp-2 text-xs leading-5 text-slate-500" x-text="(note.content || '').trim() || 'pusta notatka'"></div>
+                                            <div class="mt-2 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400" x-text="note.updated_at ? formatNoteTimestamp(note.updated_at) : 'bez zapisu'"></div>
+                                        </button>
+                                    </template>
+                                    <template x-if="brainDumpNotes.length === 0">
+                                        <div class="rounded-[22px] border border-dashed border-slate-200 px-4 py-8 text-center text-sm text-slate-400">
+                                            Brak notatek. Dodaj pierwsza.
+                                        </div>
+                                    </template>
+                                </div>
+                            </section>
+
+                            <section class="card p-5 md:p-6">
+                                <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+                                    <div>
+                                        <p class="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400">Aktywna notatka</p>
+                                        <h3 class="mt-1 text-2xl font-black text-slate-900">Wrzuc wszystko, co lata po glowie</h3>
+                                    </div>
+                                    <span class="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-500" x-text="countActiveBrainDumpLines() + ' linii'"></span>
+                                </div>
+
+                                <input x-model="brainDumpNoteTitle" @input="handleBrainDumpTitleInput()" class="mb-3 w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm font-black text-slate-900 outline-none transition-colors focus:border-emerald-300 focus:bg-white" placeholder="Tytul notatki" />
+
+                                <textarea x-model="brainDump" @input="handleBrainDumpInput()" rows="18" data-brain-dump-input class="w-full rounded-[28px] border border-slate-200 bg-slate-50 p-5 text-sm leading-7 text-slate-700 outline-none transition-colors focus:border-emerald-300 focus:bg-white" placeholder="Np.
 - oddzwonic do...
 - ogarnac rachunek
 - pomysl na projekt
@@ -920,8 +984,9 @@
                                         <span class="font-bold text-slate-700" x-text="noteSavedAt ? formatNoteTimestamp(noteSavedAt) : 'jeszcze nie zapisano'"></span>
                                     </div>
                                     <div class="flex flex-wrap gap-2">
-                                        <button @click="brainDump = ''" class="rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-500 transition-colors hover:bg-slate-50">Wyczysc</button>
-                                        <button @click="saveBrainDump()" class="rounded-2xl bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white transition-colors hover:bg-emerald-700">Zapisz brain dump</button>
+                                        <button @click="deleteBrainDumpNote()" :disabled="!activeBrainDumpNoteId" class="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-2.5 text-sm font-bold text-rose-600 transition-colors hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50">Usun</button>
+                                        <button @click="clearActiveBrainDumpNote()" class="rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-500 transition-colors hover:bg-slate-50">Wyczysc</button>
+                                        <button @click="saveBrainDump()" class="rounded-2xl bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white transition-colors hover:bg-emerald-700">Zapisz</button>
                                     </div>
                                 </div>
                             </section>
@@ -1193,7 +1258,10 @@
                                                     <span :class="getMonthlyDueBadgeClass(task)" class="mt-1 inline-flex rounded-full px-2.5 py-1 text-[11px] font-bold" x-text="getMonthlyDueLabel(task)"></span>
                                                 </span>
                                             </label>
-                                            <button @click="deleteMonthlyTask(task.id)" class="rounded-xl border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-bold text-rose-600 transition-colors hover:bg-rose-100">Usun</button>
+                                            <div class="flex shrink-0 flex-wrap gap-2">
+                                                <button @click="openMonthlyTaskModal(task)" class="rounded-xl border border-cyan-200 bg-cyan-50 px-3 py-1.5 text-xs font-bold text-cyan-700 transition-colors hover:bg-cyan-100">Edytuj</button>
+                                                <button @click="deleteMonthlyTask(task.id)" class="rounded-xl border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-bold text-rose-600 transition-colors hover:bg-rose-100">Usun</button>
+                                            </div>
                                         </div>
                                     </div>
                                 </template>
@@ -1210,42 +1278,42 @@
 
                 <template x-if="view === 'meds'">
                     <div x-cloak class="space-y-4">
-                        <section class="card p-4 md:p-5">
-                            <div class="flex flex-wrap items-center justify-between gap-3">
+                        <section class="card meds-hero-card p-4 md:p-5">
+                            <div class="meds-hero-layout flex flex-wrap items-center justify-between gap-3">
                                 <div>
                                     <p class="text-[11px] font-black uppercase tracking-[0.22em] text-emerald-700">Leki</p>
-                                    <h2 class="mt-1 text-2xl font-black tracking-tight text-slate-900 md:text-3xl">Dzienna checklista lekow</h2>
-                                    <p class="mt-2 max-w-2xl text-sm leading-6 text-slate-500">Telegram przypomina o zaplanowanej godzinie i ponawia co 5 minut, dopoki nie odhaczysz dawki.</p>
+                                    <h2 class="meds-hero-title mt-1 text-2xl font-black tracking-tight text-slate-900 md:text-3xl">Dzienna checklista lekow</h2>
+                                    <p class="meds-hero-copy mt-2 max-w-2xl text-sm leading-6 text-slate-500">Powiadomienia przypominaja o zaplanowanej godzinie i ponawiaja wedlug ustawien, dopoki nie odhaczysz dawki.</p>
                                 </div>
-                                <div class="flex flex-wrap items-center gap-2">
+                                <div class="meds-date-controls flex flex-wrap items-center gap-2">
                                     <button @click="shiftMedicationsDate(-1)" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-500 transition-colors hover:bg-slate-50">←</button>
                                     <button @click="goToMedicationsToday()" class="rounded-xl bg-slate-100 px-3 py-2 text-xs font-black text-slate-700" x-text="medicationsDate"></button>
                                     <button @click="shiftMedicationsDate(1)" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-500 transition-colors hover:bg-slate-50">→</button>
                                 </div>
                             </div>
 
-                            <div class="mt-4 grid gap-2 sm:grid-cols-3 md:max-w-[640px]">
-                                <div class="rounded-xl bg-slate-100 px-3 py-2.5">
+                            <div class="meds-summary-grid mt-4 grid gap-2 sm:grid-cols-3 md:max-w-[640px]">
+                                <div class="meds-summary-item rounded-xl bg-slate-100 px-3 py-2.5">
                                     <div class="text-lg font-black text-slate-800" x-text="medicationsSummary.scheduled"></div>
                                     <div class="text-[10px] font-black uppercase tracking-[0.14em] text-slate-500">Na ten dzien</div>
                                 </div>
-                                <div class="rounded-xl bg-emerald-50 px-3 py-2.5">
+                                <div class="meds-summary-item rounded-xl bg-emerald-50 px-3 py-2.5">
                                     <div class="text-lg font-black text-emerald-700" x-text="medicationsSummary.done"></div>
                                     <div class="text-[10px] font-black uppercase tracking-[0.14em] text-emerald-700/80">Odhaczone</div>
                                 </div>
-                                <div class="rounded-xl bg-amber-50 px-3 py-2.5">
+                                <div class="meds-summary-item rounded-xl bg-amber-50 px-3 py-2.5">
                                     <div class="text-lg font-black text-amber-700" x-text="medicationsSummary.open"></div>
                                     <div class="text-[10px] font-black uppercase tracking-[0.14em] text-amber-700/80">Czeka</div>
                                 </div>
                             </div>
                         </section>
 
-                        <section class="card p-4 md:p-5">
-                            <div class="mb-4">
+                        <section class="card meds-form-card p-4 md:p-5">
+                            <div class="meds-card-head mb-4">
                                 <p class="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400">Nowe przypomnienie</p>
                                 <h3 class="mt-1 text-xl font-black text-slate-900">Dodaj lek</h3>
                             </div>
-                            <div class="grid gap-3 md:grid-cols-[minmax(0,1.4fr)_160px_150px_auto]">
+                            <div class="meds-form-grid grid gap-3 md:grid-cols-[minmax(0,1.4fr)_160px_150px_auto]">
                                 <input x-model="newMedication.name" class="rounded-2xl border border-slate-200 bg-white p-3 text-sm font-bold outline-none transition-colors focus:border-emerald-300" placeholder="Nazwa leku, np. Medikinet" />
                                 <select x-model="newMedication.schedule_type" class="rounded-2xl border border-slate-200 bg-white p-3 text-sm font-bold outline-none transition-colors focus:border-emerald-300">
                                     <option value="daily">Codziennie</option>
@@ -1256,15 +1324,15 @@
                             </div>
                         </section>
 
-                        <section class="card p-4 md:p-5">
-                            <div class="mb-4 flex items-center justify-between gap-3">
+                        <section class="card meds-list-card p-4 md:p-5">
+                            <div class="meds-card-head mb-4 flex items-center justify-between gap-3">
                                 <h3 class="text-xl font-black text-slate-900">Lista lekow</h3>
                                 <span class="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-500" x-text="medicationsSummary.total + ' aktywne'"></span>
                             </div>
 
-                            <div class="grid gap-3 lg:grid-cols-2">
+                            <div class="meds-list-grid grid gap-3 lg:grid-cols-2">
                                 <template x-for="med in medications" :key="med.id">
-                                    <article :class="med.scheduled_today ? 'border-slate-200 bg-slate-50/80' : 'border-slate-100 bg-white/60 opacity-75'" class="rounded-[22px] border p-4">
+                                    <article :class="med.scheduled_today ? 'border-slate-200 bg-slate-50/80' : 'border-slate-100 bg-white/60 opacity-75'" class="meds-list-item rounded-[22px] border p-4">
                                         <div class="flex flex-wrap items-start justify-between gap-3">
                                             <label class="flex min-w-0 items-start gap-3 text-sm font-bold text-slate-900">
                                                 <input type="checkbox" :disabled="!med.scheduled_today" :checked="med.done" @change="toggleMedicationDone(med, $event.target.checked)" class="mt-1 h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 disabled:cursor-not-allowed disabled:opacity-40" />
@@ -1292,13 +1360,112 @@
                     </div>
                 </template>
 
+                <template x-if="view === 'notifications'">
+                    <div x-cloak class="space-y-4">
+                        <section class="card p-4 md:p-5">
+                            <div class="flex flex-wrap items-start justify-between gap-3">
+                                <div>
+                                    <p class="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400">Ustawienia</p>
+                                    <h2 class="mt-1 text-2xl font-black tracking-tight text-slate-900 md:text-3xl">Powiadomienia Web Push</h2>
+                                    <p class="mt-2 max-w-3xl text-sm leading-6 text-slate-500">Na iPhonie powiadomienia dzialaja po dodaniu aplikacji do ekranu poczatkowego. Zgoda musi byc uruchomiona przyciskiem w tej zakladce.</p>
+                                </div>
+                                <span class="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-500" x-text="getNotificationStatusLabel()"></span>
+                            </div>
+                            <div class="mt-4 grid gap-2 sm:grid-cols-3">
+                                <div class="rounded-xl bg-slate-100 px-3 py-2.5">
+                                    <div class="text-lg font-black text-slate-800" x-text="getPushPermissionLabel()"></div>
+                                    <div class="text-[10px] font-black uppercase tracking-[0.14em] text-slate-500">Zgoda</div>
+                                </div>
+                                <div class="rounded-xl bg-emerald-50 px-3 py-2.5">
+                                    <div class="text-lg font-black text-emerald-700" x-text="pushState.subscriptionCount"></div>
+                                    <div class="text-[10px] font-black uppercase tracking-[0.14em] text-emerald-700/80">Urzadzenia</div>
+                                </div>
+                                <div class="rounded-xl bg-cyan-50 px-3 py-2.5">
+                                    <div class="text-lg font-black text-cyan-700" x-text="pushState.vapidConfigured ? 'VAPID OK' : 'brak VAPID'"></div>
+                                    <div class="text-[10px] font-black uppercase tracking-[0.14em] text-cyan-700/80">Backend</div>
+                                </div>
+                            </div>
+                            <div class="mt-4 flex flex-wrap gap-2">
+                                <button @click="enablePushNotifications()" class="rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-bold text-white transition-colors hover:bg-emerald-700">Wlacz na tym urzadzeniu</button>
+                                <button @click="disablePushNotifications()" class="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-600 transition-colors hover:bg-slate-50">Wylacz tutaj</button>
+                                <button @click="sendTestNotification()" class="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-bold text-white transition-colors hover:bg-slate-800">Wyslij test</button>
+                            </div>
+                            <p x-show="pushState.message" x-cloak class="mt-3 text-sm font-bold text-slate-500" x-text="pushState.message"></p>
+                        </section>
+
+                        <section class="card p-4 md:p-5">
+                            <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+                                <div>
+                                    <p class="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400">Harmonogram</p>
+                                    <h3 class="mt-1 text-xl font-black text-slate-900">Godziny i cykle</h3>
+                                </div>
+                                <button @click="saveNotificationSettings()" class="rounded-xl bg-emerald-600 px-4 py-2.5 text-xs font-bold text-white transition-colors hover:bg-emerald-700">Zapisz ustawienia</button>
+                            </div>
+
+                            <div class="grid gap-3 lg:grid-cols-2">
+                                <label class="rounded-[20px] border border-slate-200 bg-slate-50 p-4">
+                                    <span class="flex items-start gap-3">
+                                        <input type="checkbox" x-model="notificationSettings.enabled" class="mt-1 h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500" />
+                                        <span>
+                                            <span class="block text-sm font-black text-slate-900">Wszystkie powiadomienia</span>
+                                            <span class="mt-1 block text-xs leading-5 text-slate-500">Glowny wlacznik dla harmonogramu Web Push.</span>
+                                        </span>
+                                    </span>
+                                </label>
+
+                                <label class="rounded-[20px] border border-slate-200 bg-slate-50 p-4">
+                                    <span class="flex items-start gap-3">
+                                        <input type="checkbox" x-model="notificationSettings.opening_enabled" class="mt-1 h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500" />
+                                        <span class="min-w-0 flex-1">
+                                            <span class="block text-sm font-black text-slate-900">Powiadomienie otwierajace</span>
+                                            <input type="time" x-model="notificationSettings.opening_time" class="mt-3 w-full rounded-2xl border border-slate-200 bg-white p-3 text-sm font-bold outline-none transition-colors focus:border-emerald-300" />
+                                        </span>
+                                    </span>
+                                </label>
+
+                                <label class="rounded-[20px] border border-slate-200 bg-slate-50 p-4">
+                                    <span class="flex items-start gap-3">
+                                        <input type="checkbox" x-model="notificationSettings.day_summary_enabled" class="mt-1 h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500" />
+                                        <span class="min-w-0 flex-1">
+                                            <span class="block text-sm font-black text-slate-900">Podsumowanie dnia</span>
+                                            <input type="time" x-model="notificationSettings.day_summary_time" class="mt-3 w-full rounded-2xl border border-slate-200 bg-white p-3 text-sm font-bold outline-none transition-colors focus:border-emerald-300" />
+                                        </span>
+                                    </span>
+                                </label>
+
+                                <label class="rounded-[20px] border border-slate-200 bg-slate-50 p-4">
+                                    <span class="flex items-start gap-3">
+                                        <input type="checkbox" x-model="notificationSettings.medication_enabled" class="mt-1 h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500" />
+                                        <span class="min-w-0 flex-1">
+                                            <span class="block text-sm font-black text-slate-900">Leki</span>
+                                            <span class="mt-1 block text-xs font-bold text-slate-500">Ponawiaj co tyle minut po godzinie leku:</span>
+                                            <input type="number" min="1" max="1440" x-model.number="notificationSettings.medication_repeat_minutes" class="mt-3 w-full rounded-2xl border border-slate-200 bg-white p-3 text-sm font-bold outline-none transition-colors focus:border-emerald-300" />
+                                        </span>
+                                    </span>
+                                </label>
+
+                                <label class="rounded-[20px] border border-slate-200 bg-slate-50 p-4 lg:col-span-2">
+                                    <span class="flex items-start gap-3">
+                                        <input type="checkbox" x-model="notificationSettings.task_reminder_enabled" class="mt-1 h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500" />
+                                        <span class="min-w-0 flex-1">
+                                            <span class="block text-sm font-black text-slate-900">Ogolne przypomnienia fokusowe</span>
+                                            <span class="mt-1 block text-xs font-bold text-slate-500">Dla otwartych rzeczy po terminie albo po zaplanowanej godzinie. Minimum 15 minut.</span>
+                                            <input type="number" min="15" max="1440" x-model.number="notificationSettings.task_reminder_repeat_minutes" class="mt-3 w-full rounded-2xl border border-slate-200 bg-white p-3 text-sm font-bold outline-none transition-colors focus:border-emerald-300" />
+                                        </span>
+                                    </span>
+                                </label>
+                            </div>
+                        </section>
+                    </div>
+                </template>
+
                 <template x-if="view === 'debts'">
                     <div x-cloak class="space-y-4">
                         <section class="card p-4 md:p-5">
                             <div class="flex flex-wrap items-center justify-between gap-3">
                                 <div>
-                                    <p class="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400">Splaty</p>
-                                    <h2 class="mt-1 text-2xl font-black tracking-tight text-slate-900 md:text-3xl">Kontrola zobowiazan i rat</h2>
+                                    <p class="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400">Finanse</p>
+                                    <h2 class="mt-1 text-2xl font-black tracking-tight text-slate-900 md:text-3xl">Kontrola zobowiazan i kosztow</h2>
                                 </div>
                                 <div class="flex flex-wrap items-center gap-2">
                                     <button @click="openDebtModal()" class="rounded-xl bg-emerald-600 px-3 py-2 text-xs font-bold text-white transition-colors hover:bg-emerald-700">+ Dodaj</button>
@@ -1312,7 +1479,7 @@
                                 </div>
                                 <div class="rounded-xl bg-emerald-50 px-3 py-2.5">
                                     <div class="text-lg font-black text-emerald-700" x-text="formatMoney(debtsSummary.debt_monthly)"></div>
-                                    <div class="text-[10px] font-black uppercase tracking-[0.14em] text-emerald-700/80">Splaty mies.</div>
+                                    <div class="text-[10px] font-black uppercase tracking-[0.14em] text-emerald-700/80">Raty mies.</div>
                                 </div>
                                 <div class="rounded-xl bg-sky-50 px-3 py-2.5">
                                     <div class="text-lg font-black text-sky-700" x-text="formatMoney(debtsSummary.fixed_monthly)"></div>
@@ -1351,15 +1518,15 @@
                                         </div>
                                         <label class="mt-3 inline-flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-900">
                                             <input type="checkbox" :checked="debt.month_done" @change="toggleDebtDoneForMonth(debt, (debtsMonthKey || getCurrentMonthKey()) + '-01', $event.target.checked)" class="h-4 w-4 rounded border-amber-300 text-amber-600 focus:ring-amber-500" />
-                                            <span x-text="debt.month_done ? 'Rata odhaczona na ten miesiac' : 'Oznacz rate jako oplacona (ten miesiac)'"></span>
+                                            <span x-text="getDebtPaymentDoneLabel(debt)"></span>
                                         </label>
                                         <div class="mt-3 grid gap-2 sm:grid-cols-3">
                                             <div class="rounded-xl bg-white px-3 py-2">
-                                                <div class="text-[10px] font-black uppercase tracking-[0.16em] text-slate-400">Calosc</div>
-                                                <div class="mt-1 text-sm font-bold text-slate-700" x-text="formatMoney(debt.total_amount)"></div>
+                                                <div class="text-[10px] font-black uppercase tracking-[0.16em] text-slate-400" x-text="getDebtPrimaryAmountLabel(debt)"></div>
+                                                <div class="mt-1 text-sm font-bold text-slate-700" x-text="formatMoney(getDebtPrimaryAmount(debt))"></div>
                                             </div>
                                             <div class="rounded-xl bg-emerald-50 px-3 py-2">
-                                                <div class="text-[10px] font-black uppercase tracking-[0.16em] text-emerald-700/80">Miesiecznie</div>
+                                                <div class="text-[10px] font-black uppercase tracking-[0.16em] text-emerald-700/80" x-text="getDebtMonthlyLabel(debt)"></div>
                                                 <div class="mt-1 text-sm font-bold text-emerald-700" x-text="formatMoney(debt.monthly_amount)"></div>
                                             </div>
                                             <div class="rounded-xl bg-slate-100 px-3 py-2">
@@ -1403,18 +1570,34 @@
             </main>
         </div>
 
-        <nav class="mobile-quick-nav md:hidden">
-            <button @click="view = 'dash'; closeMobileModules()" :class="view === 'dash' ? 'is-active' : ''" class="mobile-quick-nav-btn">Dzis</button>
-            <button @click="openAllTasksView(); closeMobileModules()" :class="view === 'kanban' ? 'is-active' : ''" class="mobile-quick-nav-btn">Zadania</button>
-            <button @click="openCalendarView(); closeMobileModules()" :class="view === 'calendar' ? 'is-active' : ''" class="mobile-quick-nav-btn">Kalendarz</button>
-            <button @click="toggleMobileModules()" :class="mobileModulesOpen ? 'is-active' : ''" class="mobile-quick-nav-btn">Moduly</button>
+        <nav class="bottom-nav">
+            <button @click="navigateMainView('dash')" :class="view === 'dash' ? 'is-active' : ''" class="bottom-nav-btn" type="button">
+                <span class="bottom-nav-icon">⌂</span>
+                <span>Pulpit</span>
+            </button>
+            <button @click="navigateMainView('kanban')" :class="view === 'kanban' ? 'is-active' : ''" class="bottom-nav-btn" type="button">
+                <span class="bottom-nav-icon">□</span>
+                <span>Zadania</span>
+            </button>
+            <button @click="navigateMainView('global')" :class="view === 'global' ? 'is-active' : ''" class="bottom-nav-btn" type="button">
+                <span class="bottom-nav-icon">▣</span>
+                <span>Moduly</span>
+            </button>
+            <button @click="navigateMainView('calendar')" :class="view === 'calendar' ? 'is-active' : ''" class="bottom-nav-btn" type="button">
+                <span class="bottom-nav-icon">◷</span>
+                <span>Kalendarz</span>
+            </button>
         </nav>
 
-        <button @click="openNewTaskModal(activeModule ? activeModule.id : null)" class="mobile-add-task-button fixed right-4 z-40 rounded-full bg-emerald-600 px-5 py-3 text-sm font-black text-white shadow-[0_12px_24px_rgba(5,150,105,0.28)] transition-colors hover:bg-emerald-700 md:hidden">
-            + Zadanie
-        </button>
+        <div class="fab-speed-dial" @click.outside="closeFab()">
+            <div x-show="fabOpen" x-cloak x-transition.origin.bottom.right class="fab-actions">
+                <button @click="openFabNewTask()" class="fab-action" type="button">Dodaj zadanie</button>
+                <button @click="openBrainDumpAction()" class="fab-action" type="button">Dodaj do Brain Dump</button>
+            </div>
+            <button @click="toggleFab()" :class="fabOpen ? 'is-open' : ''" class="fab-main" type="button" aria-label="Szybkie akcje">+</button>
+        </div>
 
-        <div x-show="taskModal" x-cloak class="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-slate-900/45 p-2 backdrop-blur-sm md:items-center md:p-4">
+        <div x-show="taskModal" x-cloak class="task-modal-backdrop fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-slate-900/45 p-2 backdrop-blur-sm md:items-center md:p-4">
             <div class="card task-modal-surface relative w-full max-w-6xl max-h-[94vh] overflow-y-auto p-4 md:p-7" @click.away="taskModal = false; isCreatingTask = false">
                 <div class="mb-4 border-b border-slate-200/80 pb-4">
                     <p class="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400" x-text="isCreatingTask ? 'Nowe zadanie' : 'Edycja zadania'"></p>
@@ -1552,8 +1735,8 @@
 
         <div x-show="monthlyTaskModal" x-cloak class="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-slate-900/40 p-3 backdrop-blur-sm md:items-center md:p-4">
             <div class="card relative w-full max-w-lg p-5 md:p-6" @click.away="closeMonthlyTaskModal()">
-                <p class="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Nowe zadanie miesieczne</p>
-                <h3 class="mt-1 text-2xl font-black text-slate-900">Opis i cykl powtarzania</h3>
+                <p class="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400" x-text="editingMonthlyTaskId ? 'Edycja zadania miesiecznego' : 'Nowe zadanie miesieczne'"></p>
+                <h3 class="mt-1 text-2xl font-black text-slate-900" x-text="editingMonthlyTaskId ? 'Zmien nazwe, dzien i godzine' : 'Opis i cykl powtarzania'"></h3>
                 <div class="mt-4 space-y-3">
                     <input x-model="newMonthlyTaskName" @keydown.enter.prevent="addMonthlyTask()" maxlength="120" class="w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm font-bold outline-none transition-colors focus:border-emerald-300 focus:bg-white" placeholder="Np. oplacic ZUS, podsumowac wydatki..." />
                     <select x-model="newMonthlyTaskRepeatType" class="w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm font-bold outline-none transition-colors focus:border-emerald-300 focus:bg-white">
@@ -1583,27 +1766,33 @@
                         <option :value="6">Sobota</option>
                         <option :value="7">Niedziela</option>
                     </select>
+                    <input
+                        type="time"
+                        x-model="newMonthlyTaskDueTime"
+                        @keydown.enter.prevent="addMonthlyTask()"
+                        class="w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm font-bold outline-none transition-colors focus:border-emerald-300 focus:bg-white"
+                    />
                 </div>
                 <div class="mt-5 flex items-center justify-end gap-3">
                     <button @click="closeMonthlyTaskModal()" class="rounded-2xl px-4 py-2 text-xs font-bold text-slate-400">Anuluj</button>
-                    <button @click="addMonthlyTask()" class="rounded-2xl bg-emerald-600 px-5 py-3 text-xs font-bold text-white shadow-[0_12px_24px_rgba(5,150,105,0.22)]">Dodaj</button>
+                    <button @click="addMonthlyTask()" class="rounded-2xl bg-emerald-600 px-5 py-3 text-xs font-bold text-white shadow-[0_12px_24px_rgba(5,150,105,0.22)]" x-text="editingMonthlyTaskId ? 'Zapisz' : 'Dodaj'"></button>
                 </div>
             </div>
         </div>
 
         <div x-show="debtModal" x-cloak class="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-slate-900/40 p-3 backdrop-blur-sm md:items-center md:p-4">
             <div class="card relative w-full max-w-2xl p-5 md:p-6" @click.away="closeDebtModal()">
-                <p class="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Nowa pozycja splaty</p>
-                <h3 class="mt-1 text-2xl font-black text-slate-900">Dodaj splate albo koszt staly</h3>
+                <p class="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Nowa pozycja finansowa</p>
+                <h3 class="mt-1 text-2xl font-black text-slate-900" x-text="newDebt.kind === 'fixed' ? 'Dodaj koszt staly' : 'Dodaj splate'"></h3>
                 <div class="mt-4 grid gap-3 md:grid-cols-2">
                     <select x-model="newDebt.kind" class="rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm font-bold outline-none transition-colors focus:border-emerald-300 focus:bg-white">
                         <option value="debt">Splata</option>
                         <option value="fixed">Koszt staly</option>
                     </select>
-                    <input x-model="newDebt.name" class="rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm font-bold outline-none transition-colors focus:border-emerald-300 focus:bg-white" placeholder="Co splacasz" />
+                    <input x-model="newDebt.name" class="rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm font-bold outline-none transition-colors focus:border-emerald-300 focus:bg-white" :placeholder="newDebt.kind === 'fixed' ? 'Nazwa kosztu' : 'Co splacasz'" />
                     <input x-model="newDebt.place" class="rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm font-bold outline-none transition-colors focus:border-emerald-300 focus:bg-white" placeholder="Gdzie / u kogo" />
-                    <input type="number" min="0" step="0.01" x-model="newDebt.total_amount" class="rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm font-bold outline-none transition-colors focus:border-emerald-300 focus:bg-white" placeholder="Kwota calkowita" />
-                    <input type="number" min="0" step="0.01" x-model="newDebt.monthly_amount" class="rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm font-bold outline-none transition-colors focus:border-emerald-300 focus:bg-white" placeholder="Rata miesieczna" />
+                    <input x-show="newDebt.kind === 'debt'" x-cloak type="number" min="0" step="0.01" x-model="newDebt.total_amount" class="rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm font-bold outline-none transition-colors focus:border-emerald-300 focus:bg-white" placeholder="Kwota calkowita" />
+                    <input type="number" min="0" step="0.01" x-model="newDebt.monthly_amount" class="rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm font-bold outline-none transition-colors focus:border-emerald-300 focus:bg-white" :placeholder="newDebt.kind === 'fixed' ? 'Kwota oplaty' : 'Rata miesieczna'" />
                     <input type="number" min="1" max="31" x-model="newDebt.due_day" class="rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm font-bold outline-none transition-colors focus:border-emerald-300 focus:bg-white" placeholder="Dzien miesiaca" />
                 </div>
                 <textarea x-model="newDebt.note" rows="2" class="mt-3 w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm outline-none transition-colors focus:border-emerald-300 focus:bg-white" placeholder="Krotka notatka (opcjonalnie)"></textarea>

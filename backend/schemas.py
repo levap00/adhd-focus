@@ -80,9 +80,20 @@ class NotePayload(BaseModel):
     content: str = ""
 
 
+class BrainDumpNoteCreate(BaseModel):
+    title: str = ""
+    content: str = ""
+
+
+class BrainDumpNoteUpdate(BaseModel):
+    title: Optional[str] = None
+    content: Optional[str] = None
+
+
 class MonthlyTaskCreate(BaseModel):
     name: str
     due_day: int = 0
+    due_time: str = "23:59"
     repeat_type: str = "monthly"
     repeat_weekday: int = 1
 
@@ -90,6 +101,7 @@ class MonthlyTaskCreate(BaseModel):
 class MonthlyTaskUpdate(BaseModel):
     name: str
     due_day: int = 0
+    due_time: str = "23:59"
     repeat_type: str = "monthly"
     repeat_weekday: int = 1
 
@@ -141,3 +153,21 @@ class DebtUpdate(BaseModel):
 class DebtStatePayload(BaseModel):
     month_key: Optional[str] = None
     done: Optional[bool] = None
+
+
+class PushSubscriptionPayload(BaseModel):
+    subscription: dict
+    user_agent: str = ""
+
+
+class NotificationSettingsPayload(BaseModel):
+    enabled: bool = True
+    opening_enabled: bool = True
+    opening_time: str = "08:00"
+    day_summary_enabled: bool = True
+    day_summary_time: str = "20:30"
+    medication_enabled: bool = True
+    medication_repeat_minutes: int = 5
+    task_reminder_enabled: bool = True
+    task_reminder_repeat_minutes: int = 120
+    timezone: str = "Europe/Warsaw"

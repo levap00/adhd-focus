@@ -1,4 +1,5 @@
 import base64
+import binascii
 import hashlib
 import hmac
 import os
@@ -54,6 +55,38 @@ def resolve_authenticated_username(username: str, password: str) -> Optional[str
     if secrets.compare_digest(username, account.username) and verify_password(password, account.hashed_password):
         return account.username
     return None
+
+
+def _decode_basic_query_token(raw_token: str) -> Optional[tuple[str, str]]:
+    clean_token = (raw_token or "").strip().replace(" ", "+")
+    if not clean_token:
+        return None
+
+    padded_token = clean_token + ("=" * (-len(clean_token) % 4))
+    for altchars in (None, b"-_"):
+        try:
+            decoded = base64.b64decode(
+                padded_token.encode("ascii"),
+                altchars=altchars,
+                validate=True,
+            ).decode("utf-8")
+        except (binascii.Error, UnicodeEncodeError, UnicodeDecodeError):
+            continue
+
+        if ":" not in decoded:
+            continue
+        username, password = decoded.split(":", 1)
+        return username, password
+
+    return None
+
+
+def resolve_query_token_user(raw_token: str) -> Optional[str]:
+    credentials = _decode_basic_query_token(raw_token)
+    if not credentials:
+        return None
+    username, password = credentials
+    return resolve_authenticated_username(username, password)
 
 
 def set_request_user(username: Optional[str]) -> Token:
@@ -132,6 +165,13 @@ async def verify_credentials(
         if basic_user:
             set_request_user(basic_user)
             return basic_user
+
+    query_token = request.query_params.get("token", "")
+    if query_token:
+        token_user = resolve_query_token_user(query_token)
+        if token_user:
+            set_request_user(token_user)
+            return token_user
 
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,

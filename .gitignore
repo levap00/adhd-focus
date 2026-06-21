@@ -1,6 +1,8 @@
 .env
+secrets/
 accounts.db
 app.db
+app.db.backup-*.db
 
 *.log
 
