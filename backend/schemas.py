@@ -39,13 +39,14 @@ class TaskSubtaskPayload(BaseModel):
 
 class TaskCreate(BaseModel):
     name: str
-    module_id: int
+    module_id: Optional[int] = None
     status: str = "oczekujace"
     estimated_time: int = 0
     points_weight: float = 1.0
     description: str = ""
     due_date: str = ""
     due_time: str = ""
+    reminder_offset_minutes: int = 0
     priority: str = ""
     allow_time_overflow: bool = False
     subtasks: list[TaskSubtaskPayload] = []
@@ -59,6 +60,7 @@ class TaskUpdate(BaseModel):
     description: Optional[str] = None
     due_date: Optional[str] = None
     due_time: Optional[str] = None
+    reminder_offset_minutes: Optional[int] = None
     estimated_time: Optional[int] = None
     points_weight: Optional[float] = None
     allow_time_overflow: Optional[bool] = None

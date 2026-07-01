@@ -29,6 +29,22 @@ body {
     font-family: "Plus Jakarta Sans", system-ui, sans-serif;
 }
 
+body.modal-open {
+    overflow: hidden;
+    overscroll-behavior: none;
+}
+
+.task-modal-backdrop {
+    overscroll-behavior: contain;
+    touch-action: none;
+}
+
+.task-modal-surface {
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-y;
+}
+
 body.theme-dark {
     color-scheme: dark;
     background:

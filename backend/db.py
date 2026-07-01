@@ -73,6 +73,7 @@ def _init_db() -> None:
                 description TEXT DEFAULT '',
                 due_date TEXT DEFAULT '',
                 due_time TEXT DEFAULT '',
+                reminder_offset_minutes INTEGER NOT NULL DEFAULT 0,
                 estimated_time INTEGER DEFAULT 0,
                 points_weight REAL DEFAULT 1,
                 owner_user_id INTEGER NOT NULL,
@@ -333,6 +334,7 @@ def _init_db() -> None:
         _ensure_column(conn, "tasks", "description", "TEXT DEFAULT ''")
         _ensure_column(conn, "tasks", "due_date", "TEXT DEFAULT ''")
         _ensure_column(conn, "tasks", "due_time", "TEXT DEFAULT ''")
+        _ensure_column(conn, "tasks", "reminder_offset_minutes", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(conn, "tasks", "estimated_time", "INTEGER DEFAULT 0")
         _ensure_column(conn, "tasks", "points_weight", "REAL DEFAULT 1")
         _ensure_column(conn, "tasks", "owner_user_id", "INTEGER")
@@ -408,7 +410,7 @@ def _init_db() -> None:
         conn.execute("UPDATE tasks SET due_date = '' WHERE due_date IS NULL")
         conn.execute("UPDATE tasks SET due_time = '' WHERE due_time IS NULL")
         conn.execute("UPDATE tasks SET due_time = '' WHERE TRIM(due_date) = ''")
-        conn.execute("UPDATE tasks SET due_time = '23:59' WHERE due_date != '' AND (TRIM(due_time) = '' OR TRIM(due_time) = '14:00')")
+        conn.execute("UPDATE tasks SET reminder_offset_minutes = 0 WHERE reminder_offset_minutes IS NULL OR reminder_offset_minutes < 0")
         conn.execute("UPDATE tasks SET estimated_time = 0 WHERE estimated_time IS NULL")
         conn.execute("UPDATE tasks SET points_weight = 1 WHERE points_weight IS NULL OR points_weight <= 0")
         conn.execute("UPDATE tasks SET status = 'przygotowanie' WHERE status IN ('analiza', 'wstepne')")
@@ -472,6 +474,7 @@ def _init_db() -> None:
         conn.execute("UPDATE notification_settings SET task_reminder_repeat_minutes = 120 WHERE task_reminder_repeat_minutes IS NULL OR task_reminder_repeat_minutes < 15")
         conn.execute("UPDATE notification_settings SET timezone = 'Europe/Warsaw' WHERE timezone IS NULL OR TRIM(timezone) = ''")
         conn.execute("UPDATE notification_settings SET updated_at = '' WHERE updated_at IS NULL")
+        conn.execute("DELETE FROM notification_delivery_markers WHERE marker_key LIKE 'telegram-%' OR marker_key LIKE 'telegram:%'")
         conn.execute("UPDATE debts SET place = '' WHERE place IS NULL")
         conn.execute("UPDATE debts SET kind = 'debt' WHERE kind IS NULL OR TRIM(kind) = ''")
         conn.execute("UPDATE debts SET kind = 'fixed' WHERE kind IN ('cost', 'fixed_cost', 'koszt')")

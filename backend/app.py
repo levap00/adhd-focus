@@ -8,7 +8,6 @@ from backend.auth import get_session_user, reset_request_user, set_request_user,
 from backend.db import init_db
 from backend.rate_limit import install_rate_limiter
 from backend.routers import auth_session, debts, medications, modules, monthly_tasks, notes, notifications, rewards, static_files, tasks
-from backend.telegram import register_telegram_scheduler
 from backend.web_push import register_web_push_scheduler
 
 
@@ -71,7 +70,6 @@ def create_app() -> FastAPI:
     app.include_router(notifications.router, dependencies=protected)
 
     init_db()
-    register_telegram_scheduler(app)
     register_web_push_scheduler(app)
     return app
 

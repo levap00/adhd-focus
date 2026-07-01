@@ -148,6 +148,16 @@
                     { id: 'todo', name: 'Teraz robie', color: 'text-cyan-600' },
                     { id: 'gotowe', name: 'Gotowe', color: 'text-emerald-600' }
                 ],
+                taskReminderOptions: [
+                    { value: 0, label: 'O czasie' },
+                    { value: 5, label: '5 min przed' },
+                    { value: 10, label: '10 min przed' },
+                    { value: 15, label: '15 min przed' },
+                    { value: 30, label: '30 min przed' },
+                    { value: 60, label: '1 godz. przed' },
+                    { value: 120, label: '2 godz. przed' },
+                    { value: 1440, label: '1 dzien przed' }
+                ],
                 moduleThemes: [
                     {
                         badge: 'border-emerald-100 bg-emerald-50 text-emerald-700',
@@ -231,11 +241,19 @@
                     let consumed = false;
                     const requestedView = (params.get('view') || '').trim().toLowerCase();
                     const medicationDate = this.sanitizeDateKey(params.get('med_date') || params.get('medication_date') || '');
+                    const calendarDate = this.sanitizeDateKey(params.get('date') || params.get('calendar_date') || '');
 
                     if (requestedView === 'meds' || medicationDate) {
                         this.view = 'meds';
                         if (medicationDate) {
                             this.medicationsDate = medicationDate;
+                        }
+                        consumed = true;
+                    } else if (requestedView === 'calendar' || calendarDate) {
+                        this.view = 'calendar';
+                        if (calendarDate) {
+                            this.selectedDate = calendarDate;
+                            this.calendarCursor = calendarDate;
                         }
                         consumed = true;
                     } else if (['dash', 'kanban', 'global', 'calendar', 'brain', 'canvas', 'docs', 'monthly', 'debts', 'notifications'].includes(requestedView)) {
@@ -247,6 +265,8 @@
                     params.delete('view');
                     params.delete('med_date');
                     params.delete('medication_date');
+                    params.delete('date');
+                    params.delete('calendar_date');
                     const cleanQuery = params.toString();
                     const nextUrl = `${window.location.pathname}${cleanQuery ? `?${cleanQuery}` : ''}${window.location.hash || ''}`;
                     window.history.replaceState({}, '', nextUrl);
@@ -389,7 +409,7 @@
 
                 openFabNewTask() {
                     this.closeFab();
-                    this.openNewTaskModal(this.activeModule ? this.activeModule.id : null);
+                    this.openNewTaskModal();
                 },
 
                 openBrainDumpAction() {
@@ -525,6 +545,12 @@
                     const parsed = Math.round(Number(value));
                     if (!Number.isFinite(parsed) || parsed < 0) return 0;
                     return parsed;
+                },
+
+                normalizeReminderOffsetMinutes(value) {
+                    const parsed = Math.round(Number(value));
+                    if (!Number.isFinite(parsed) || parsed < 0) return 0;
+                    return Math.min(1440, parsed);
                 },
 
                 normalizeOptionalId(value) {
@@ -697,11 +723,13 @@
                     const payload = await res.json();
                     this.tasks = payload.map(task => ({
                         ...task,
+                        module_id: this.normalizeOptionalId(task.module_id),
                         status: this.normalizeTaskStatus(task.status),
                         priority: this.normalizePriorityValue(task.priority),
                         estimated_time: this.normalizeEstimatedMinutes(task.estimated_time),
                         points_weight: this.normalizePointsWeight(task.points_weight),
-                        due_time: this.sanitizeDueTime(task.due_time, task.due_date ? '23:59' : ''),
+                        due_time: this.sanitizeDueTime(task.due_time, ''),
+                        reminder_offset_minutes: this.normalizeReminderOffsetMinutes(task.reminder_offset_minutes),
                         is_shared: !!task.is_shared,
                         shared_role: (task.shared_role || 'owner').toString(),
                         share_count: Number(task.share_count || 0),
@@ -1538,7 +1566,8 @@
                 },
 
                 isCalendarTimelineEntry(entry) {
-                    return entry?.type === 'task' || entry?.type === 'monthly';
+                    if (entry?.type === 'task') return !!this.getTaskDueTime(entry.item);
+                    return entry?.type === 'monthly';
                 },
 
                 getDaysBetweenDateKeys(fromDateKey, toDateKey) {
@@ -1565,7 +1594,10 @@
                             entries,
                             timelineMetrics: dayDraft.timelineMetrics,
                             timelineEntries: dayDraft.timelineEntries,
-                            nonTaskEntries: entries.filter(entry => entry?.type === 'debt'),
+                            nonTaskEntries: entries.filter(entry => (
+                                entry?.type === 'debt' ||
+                                (entry?.type === 'task' && !this.getTaskDueTime(entry.item))
+                            )),
                             plannedMinutes: workload.plannedMinutes,
                             isOverLimit: workload.isOverLimit
                         });
@@ -1804,8 +1836,8 @@
                     const durationMinutes = entry?.type === 'task'
                         ? Math.max(15, this.getTaskEffectiveEstimatedMinutes(entry?.item))
                         : 30;
-                    const startMinutes = Math.max(0, dueMinutes - durationMinutes);
-                    const endMinutes = Math.max(startMinutes + 15, dueMinutes);
+                    const startMinutes = Math.max(0, dueMinutes);
+                    const endMinutes = Math.min(24 * 60, Math.max(startMinutes + 15, dueMinutes + durationMinutes));
                     return {
                         startMinutes,
                         endMinutes,
@@ -1970,7 +2002,7 @@
                 },
 
                 getCalendarEntryTime(entry) {
-                    if (entry?.type === 'task') return this.getTaskDueTime(entry.item) || '23:59';
+                    if (entry?.type === 'task') return this.getTaskDueTime(entry.item);
                     if (entry?.type === 'monthly') return this.getMonthlyDueTime(entry.item);
                     return '';
                 },
@@ -2091,8 +2123,8 @@
                 getTaskDueDateTime(task) {
                     const dueDate = this.sanitizeDateKey(task?.due_date);
                     if (!dueDate) return null;
-                    const dueTime = this.sanitizeDueTime(task?.due_time, '23:59') || '23:59';
-                    const [hours, minutes] = dueTime.split(':').map(Number);
+                    const dueTime = this.sanitizeDueTime(task?.due_time, '');
+                    const [hours, minutes] = (dueTime || '23:59').split(':').map(Number);
                     const due = this.keyToDate(dueDate);
                     due.setHours(hours || 0, minutes || 0, 0, 0);
                     return due;
@@ -2100,7 +2132,7 @@
 
                 getTaskDueTime(task) {
                     if (!this.sanitizeDateKey(task?.due_date)) return '';
-                    return this.sanitizeDueTime(task?.due_time, '23:59');
+                    return this.sanitizeDueTime(task?.due_time, '');
                 },
 
                 getTaskDoneDateKey(task) {
@@ -2270,7 +2302,7 @@
 
                 getModuleName(moduleId) {
                     const module = this.modules.find(item => item.id === moduleId);
-                    return module ? module.name : '?';
+                    return module ? module.name : 'Bez modulu';
                 },
 
                 getModuleOpenCount(moduleId) {
@@ -3051,14 +3083,15 @@
 
                 pickTaskPayload(task) {
                     const dueDate = this.sanitizeDateKey(task.due_date);
-                    const dueTime = dueDate ? this.sanitizeDueTime(task.due_time, '23:59') : '';
+                    const dueTime = dueDate ? this.sanitizeDueTime(task.due_time, '') : '';
                     return {
                         name: task.name,
-                        module_id: Number(task.module_id) || 0,
+                        module_id: this.normalizeOptionalId(task.module_id),
                         priority: this.normalizePriorityValue(task.priority),
                         description: task.description || '',
                         due_date: dueDate,
                         due_time: dueTime,
+                        reminder_offset_minutes: this.normalizeReminderOffsetMinutes(task.reminder_offset_minutes),
                         estimated_time: this.normalizeEstimatedMinutes(task.estimated_time) || 15,
                         points_weight: this.normalizePointsWeight(task.points_weight),
                         status: this.normalizeTaskStatus(task.status),
@@ -3123,6 +3156,8 @@
                     if (module) {
                         this.activeModule = module;
                         this.setTaskScope('module');
+                    } else {
+                        this.setTaskScope('all');
                     }
                     this.view = 'kanban';
                     this.closeMobileModules();
@@ -3415,21 +3450,15 @@
                 },
 
                 openNewTaskModal(preferredModuleId = null) {
-                    const fallbackModule = this.activeModule || this.getSidebarModules()[0];
-                    const targetModuleId = Number(preferredModuleId || fallbackModule?.id || 0);
-                    if (!targetModuleId) {
-                        alert('Najpierw dodaj modul.');
-                        return;
-                    }
-
                     this.isCreatingTask = true;
                     this.editingTask = {
                         id: null,
                         name: '',
-                        module_id: targetModuleId,
+                        module_id: this.normalizeOptionalId(preferredModuleId) || '',
                         description: '',
                         due_date: '',
-                        due_time: '23:59',
+                        due_time: '',
+                        reminder_offset_minutes: 0,
                         estimated_time: 15,
                         points_weight: 1,
                         priority: '',
@@ -3467,7 +3496,8 @@
                     this.editingTask = {
                         description: '',
                         due_date: '',
-                        due_time: '23:59',
+                        due_time: '',
+                        reminder_offset_minutes: 0,
                         estimated_time: 15,
                         points_weight: 1,
                         priority: '',
@@ -3475,10 +3505,12 @@
                         subtasks: [],
                         ...task,
                         status: this.normalizeTaskStatus(task?.status),
+                        module_id: this.normalizeOptionalId(task?.module_id) || '',
                         priority: this.normalizePriorityValue(task?.priority),
                         estimated_time: effectiveMinutes,
                         points_weight: effectivePoints,
-                        due_time: this.sanitizeDueTime(task?.due_time, task?.due_date ? '23:59' : ''),
+                        due_time: this.sanitizeDueTime(task?.due_time, ''),
+                        reminder_offset_minutes: this.normalizeReminderOffsetMinutes(task?.reminder_offset_minutes),
                         subtasks: normalizedSubtasks
                     };
                     this.taskModal = true;
@@ -3506,8 +3538,9 @@
                         const pickedDueTime = this.$refs?.taskDueTimeInput?.value || this.editingTask.due_time;
                         this.editingTask.due_date = this.sanitizeDateKey(pickedDueDate);
                         this.editingTask.due_time = this.editingTask.due_date
-                            ? this.sanitizeDueTime(pickedDueTime, '23:59')
+                            ? this.sanitizeDueTime(pickedDueTime, '')
                             : '';
+                        this.editingTask.reminder_offset_minutes = this.normalizeReminderOffsetMinutes(this.editingTask.reminder_offset_minutes);
                         this.editingTask.estimated_time = this.normalizeEstimatedMinutes(this.editingTask.estimated_time) || 15;
                         this.editingTask.points_weight = this.normalizePointsWeight(this.editingTask.points_weight);
                         this.editingTask.subtasks = this.normalizeSubtasks(this.editingTask.subtasks);
@@ -3535,11 +3568,6 @@
                         payload.name = (payload.name || '').trim();
                         if (!payload.name) {
                             alert('Podaj nazwe zadania.');
-                            return;
-                        }
-
-                        if (!payload.module_id) {
-                            alert('Wybierz modul.');
                             return;
                         }
 

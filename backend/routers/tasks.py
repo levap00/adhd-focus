@@ -11,7 +11,6 @@ from backend.accounts import AccountConfig, get_user_by_username
 from backend.auth import get_request_user
 from backend.db import get_db
 from backend.schemas import TaskCreate, TaskMergePayload, TaskSharePayload, TaskUpdate
-from backend.telegram import notify_task_closed
 from backend.utils import (
     normalize_due_date,
     normalize_due_time,
@@ -95,10 +94,15 @@ def _delete_task_reward_claim(conn, task_id: int) -> None:
 
 def _normalize_optional_int(raw_value: Any) -> int | None:
     if isinstance(raw_value, int) and not isinstance(raw_value, bool):
-        return raw_value
-    if isinstance(raw_value, str) and raw_value.isdigit():
-        return int(raw_value)
+        return raw_value if raw_value > 0 else None
+    if isinstance(raw_value, str) and raw_value.strip().isdigit():
+        value = int(raw_value.strip())
+        return value if value > 0 else None
     return None
+
+
+def _normalize_reminder_offset_minutes(raw_value: Any) -> int:
+    return min(1440, parse_non_negative_int(raw_value, default=0))
 
 
 def _normalize_subtasks(raw_subtasks: Any) -> list[dict]:
@@ -717,7 +721,7 @@ def _task_to_merge_subtasks(task: dict, subtasks: list[dict], prefix_nested: boo
                 "points_weight": _normalize_points_weight(task.get("points_weight")),
                 "done_at": task_done_at,
                 "source_task_id": int(task["id"]),
-                "source_module_id": int(task["module_id"]),
+                "source_module_id": _normalize_optional_int(task.get("module_id")),
                 "source_due_date": source_due_date,
                 "source_due_time": source_due_time,
                 "position": 0,
@@ -744,7 +748,7 @@ def _task_to_merge_subtasks(task: dict, subtasks: list[dict], prefix_nested: boo
                 ),
                 "done_at": done_at,
                 "source_task_id": _normalize_optional_int(subtask.get("source_task_id")) or int(task["id"]),
-                "source_module_id": _normalize_optional_int(subtask.get("source_module_id")) or int(task["module_id"]),
+                "source_module_id": _normalize_optional_int(subtask.get("source_module_id")) or _normalize_optional_int(task.get("module_id")),
                 "source_due_date": normalize_due_date(subtask.get("source_due_date") or "") or source_due_date,
                 "source_due_time": normalize_due_time(subtask.get("source_due_time") or "", default="") or source_due_time,
                 "position": len(merged),
@@ -780,7 +784,7 @@ def _choose_parent_status(target_task: dict, source_task: dict, merged_subtasks:
 def _choose_parent_due(tasks: list[dict]) -> tuple[str, str]:
     def sort_key(task: dict) -> tuple[str, str]:
         due_date = normalize_due_date(task.get("due_date") or "")
-        due_time = normalize_due_time(task.get("due_time") or "", default="23:59") if due_date else ""
+        due_time = normalize_due_time(task.get("due_time") or "", default="") if due_date else ""
         return due_date, due_time or "23:59"
 
     open_candidates = [
@@ -798,7 +802,7 @@ def _choose_parent_due(tasks: list[dict]) -> tuple[str, str]:
 
     selected = min(candidates, key=sort_key)
     due_date = normalize_due_date(selected.get("due_date") or "")
-    due_time = normalize_due_time(selected.get("due_time") or "", default="23:59") if due_date else ""
+    due_time = normalize_due_time(selected.get("due_time") or "", default="") if due_date else ""
     return due_date, due_time
 
 
@@ -850,9 +854,9 @@ def _build_merge_description(
 
 
 def _build_merge_task_name(target_task: dict, source_task: dict, module_names: dict[int, str]) -> str:
-    target_module_id = int(target_task["module_id"])
-    source_module_id = int(source_task["module_id"])
-    module_name = module_names.get(target_module_id, "").strip()
+    target_module_id = _normalize_optional_int(target_task.get("module_id"))
+    source_module_id = _normalize_optional_int(source_task.get("module_id"))
+    module_name = module_names.get(target_module_id or 0, "").strip()
     joined_names = f"{target_task.get('name') or ''} {source_task.get('name') or ''}".lower()
     looks_like_fixes = any(keyword in joined_names for keyword in ["popraw", "napraw", "fix", "bug", "blad", "korekt"])
 
@@ -1281,7 +1285,7 @@ def merge_tasks(payload: TaskMergePayload):
         next_status = _choose_parent_status(target_task, source_task, merged_subtasks)
         next_priority = _choose_parent_priority([target_task, source_task])
         next_due_date, next_due_time = _choose_parent_due([target_task, source_task])
-        next_module_id = int(target_task["module_id"])
+        next_module_id = _normalize_optional_int(target_task.get("module_id"))
 
         limit_date = _task_limit_date(next_due_date, next_status, next_description)
         planned_before = _get_daily_planned_minutes(
@@ -1384,7 +1388,9 @@ def add_task(payload: TaskCreate):
     clean_status = normalize_status(payload.status)
     clean_description = (payload.description or "").strip()
     clean_due_date = normalize_due_date(payload.due_date)
-    clean_due_time = normalize_due_time(payload.due_time, default="23:59") if clean_due_date else ""
+    clean_due_time = normalize_due_time(payload.due_time, default="") if clean_due_date else ""
+    clean_module_id = _normalize_optional_int(payload.module_id)
+    clean_reminder_offset_minutes = _normalize_reminder_offset_minutes(payload.reminder_offset_minutes)
     safe_estimated_time = parse_non_negative_int(payload.estimated_time)
     safe_points_weight = _normalize_points_weight(payload.points_weight)
     allow_time_overflow = bool(payload.allow_time_overflow)
@@ -1397,12 +1403,13 @@ def add_task(payload: TaskCreate):
         raise HTTPException(status_code=400, detail="Podaj szacowany czas zadania (minuty, wiecej niz 0).")
 
     with get_db() as conn:
-        module_exists = conn.execute(
-            "SELECT 1 FROM modules WHERE id = ? AND owner_user_id = ?",
-            (payload.module_id, current_account.id),
-        ).fetchone()
-        if not module_exists:
-            raise HTTPException(status_code=404, detail="Modul nie znaleziony")
+        if clean_module_id is not None:
+            module_exists = conn.execute(
+                "SELECT 1 FROM modules WHERE id = ? AND owner_user_id = ?",
+                (clean_module_id, current_account.id),
+            ).fetchone()
+            if not module_exists:
+                raise HTTPException(status_code=404, detail="Modul nie znaleziony")
 
         limit_date = _task_limit_date(clean_due_date, clean_status, clean_description)
         planned_before = _get_daily_planned_minutes(conn, current_account, limit_date)
@@ -1427,13 +1434,14 @@ def add_task(payload: TaskCreate):
                 description,
                 due_date,
                 due_time,
+                reminder_offset_minutes,
                 owner_user_id
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 clean_name,
-                payload.module_id,
+                clean_module_id,
                 safe_estimated_time,
                 safe_points_weight,
                 clean_status,
@@ -1441,6 +1449,7 @@ def add_task(payload: TaskCreate):
                 clean_description,
                 clean_due_date,
                 clean_due_time,
+                clean_reminder_offset_minutes,
                 current_account.id,
             ),
         )
@@ -1467,6 +1476,7 @@ def update_task(task_id: int, task_data: TaskUpdate):
         "description",
         "due_date",
         "due_time",
+        "reminder_offset_minutes",
         "estimated_time",
         "points_weight",
     }
@@ -1494,6 +1504,9 @@ def update_task(task_id: int, task_data: TaskUpdate):
     if "points_weight" in update_data:
         update_data["points_weight"] = _normalize_points_weight(update_data["points_weight"])
 
+    if "reminder_offset_minutes" in update_data:
+        update_data["reminder_offset_minutes"] = _normalize_reminder_offset_minutes(update_data["reminder_offset_minutes"])
+
     with get_db() as conn:
         _require_task_access(conn, task_id, current_account)
         existing_task = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
@@ -1503,19 +1516,20 @@ def update_task(task_id: int, task_data: TaskUpdate):
         existing_task = dict(existing_task)
 
         if "module_id" in update_data:
-            module_exists = conn.execute(
-                "SELECT 1 FROM modules WHERE id = ? AND owner_user_id = ?",
-                (update_data["module_id"], current_account.id),
-            ).fetchone()
-            if not module_exists:
-                raise HTTPException(status_code=404, detail="Modul nie znaleziony")
+            update_data["module_id"] = _normalize_optional_int(update_data["module_id"])
+            if update_data["module_id"] is not None:
+                module_exists = conn.execute(
+                    "SELECT 1 FROM modules WHERE id = ? AND owner_user_id = ?",
+                    (update_data["module_id"], current_account.id),
+                ).fetchone()
+                if not module_exists:
+                    raise HTTPException(status_code=404, detail="Modul nie znaleziony")
 
         if "due_date" in update_data or "due_time" in update_data:
             next_due_date = normalize_due_date(update_data.get("due_date", existing_task.get("due_date", "")))
-            due_time_default = "23:59" if next_due_date else ""
             next_due_time = normalize_due_time(
                 update_data.get("due_time", existing_task.get("due_time", "")),
-                default=due_time_default,
+                default="",
             )
             update_data["due_date"] = next_due_date
             update_data["due_time"] = next_due_time if next_due_date else ""
@@ -1568,9 +1582,6 @@ def update_task(task_id: int, task_data: TaskUpdate):
 
         conn.commit()
 
-    if was_open and not will_be_open:
-        notify_task_closed(update_data.get("name") or existing_task.get("name") or "(bez nazwy)")
-
     return {"status": "updated"}
 
 
@@ -1597,9 +1608,6 @@ def delete_task(task_id: int):
 
         conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
         conn.commit()
-
-    if was_open:
-        notify_task_closed(task_name)
 
     return {"status": "deleted"}
 
@@ -1654,8 +1662,6 @@ def shred_task(task_id: int):
                 )
             conn.commit()
 
-        if was_open_before_shred:
-            notify_task_closed(task["name"] or "(bez nazwy)")
         return {"status": "ok"}
     except Exception as exc:  # pragma: no cover - dependent on external model server
         raise HTTPException(

@@ -207,7 +207,15 @@ def _parse_date(raw: str) -> Optional[date]:
 def _open_task_rows(conn, user_id: int) -> list[dict[str, Any]]:
     rows = conn.execute(
         """
-        SELECT t.id, t.name, t.status, t.priority, t.due_date, t.due_time, m.name AS module_name
+        SELECT
+            t.id,
+            t.name,
+            t.status,
+            t.priority,
+            t.due_date,
+            t.due_time,
+            COALESCE(t.reminder_offset_minutes, 0) AS reminder_offset_minutes,
+            m.name AS module_name
         FROM tasks t
         LEFT JOIN modules m ON m.id = t.module_id
         WHERE t.status != 'gotowe'
@@ -230,7 +238,10 @@ def _task_due_at(task: dict[str, Any], tz: ZoneInfo) -> Optional[datetime]:
     due_day = _parse_date(task.get("due_date", ""))
     if not due_day:
         return None
-    due_time = _parse_schedule_time(task.get("due_time", ""), "23:59")
+    clean_due_time = normalize_due_time(task.get("due_time", ""), default="")
+    if not clean_due_time:
+        return None
+    due_time = _parse_schedule_time(clean_due_time, "00:00")
     return datetime.combine(due_day, due_time, tzinfo=tz)
 
 
@@ -382,12 +393,53 @@ def _process_medications(conn, user_id: int, settings: dict[str, Any], now: date
             _send_scheduled_notification(conn, user_id, _push_payload("Lek do odhaczenia", body, marker, url), marker)
 
 
+def _task_reminder_offset_minutes(task: dict[str, Any]) -> int:
+    try:
+        value = int(task.get("reminder_offset_minutes") or 0)
+    except (TypeError, ValueError):
+        value = 0
+    return min(1440, max(0, value))
+
+
+def _process_due_task_notifications(conn, user_id: int, now: datetime, tz: ZoneInfo) -> None:
+    for task in _sort_tasks(_open_task_rows(conn, user_id), tz):
+        due_at = _task_due_at(task, tz)
+        if not due_at:
+            continue
+
+        offset_minutes = _task_reminder_offset_minutes(task)
+        scheduled_at = due_at - timedelta(minutes=offset_minutes)
+        if not (scheduled_at <= now <= scheduled_at + timedelta(minutes=WEB_PUSH_SCHEDULE_GRACE_MINUTES)):
+            continue
+
+        task_id = int(task.get("id") or 0)
+        marker = f"webpush:task-due:{task_id}:{due_at.strftime('%Y%m%d%H%M')}:{offset_minutes}"
+        if not _claim_marker(conn, user_id, marker):
+            continue
+
+        due_label = due_at.strftime("%H:%M")
+        when_label = "teraz" if offset_minutes <= 0 else f"za {offset_minutes} min"
+        module_name = (task.get("module_name") or "").strip()
+        module_suffix = f" ({module_name})" if module_name else ""
+        body = f"{task.get('name') or 'Zadanie'}{module_suffix}: {when_label}, start {due_label}."
+        title = "Czas na zadanie" if offset_minutes <= 0 else "Zadanie sie zbliza"
+        url = f"/?view=calendar&date={due_at.date().isoformat()}"
+        _send_scheduled_notification(conn, user_id, _push_payload(title, body, marker, url), marker)
+
+
 def _process_task_reminders(conn, user_id: int, settings: dict[str, Any], now: datetime, tz: ZoneInfo) -> None:
     if not settings["task_reminder_enabled"]:
         return
 
     open_tasks = _sort_tasks(_open_task_rows(conn, user_id), tz)
-    due_tasks = [task for task in open_tasks if (_task_due_at(task, tz) and _task_due_at(task, tz) <= now)]
+    due_tasks = [
+        task
+        for task in open_tasks
+        if (
+            _task_due_at(task, tz)
+            and (_task_due_at(task, tz) + timedelta(minutes=WEB_PUSH_SCHEDULE_GRACE_MINUTES)) < now
+        )
+    ]
     if not due_tasks:
         return
 
@@ -436,6 +488,7 @@ def process_scheduled_web_push_notifications() -> None:
             _process_opening(conn, user_id, settings, now, tz)
             _process_day_summary(conn, user_id, settings, now, tz)
             _process_medications(conn, user_id, settings, now)
+            _process_due_task_notifications(conn, user_id, now, tz)
             _process_task_reminders(conn, user_id, settings, now, tz)
 
 
