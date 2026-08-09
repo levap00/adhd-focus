@@ -1,4 +1,5 @@
 .env
+.web-push-scheduler.lock
 secrets/
 accounts.db
 app.db

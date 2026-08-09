@@ -11,7 +11,9 @@ from backend.schemas import MonthlyTaskCreate, MonthlyTaskStatePayload, MonthlyT
 from backend.utils import normalize_due_time, normalize_month_key, parse_non_negative_int, utc_now_iso
 
 router = APIRouter()
+DATE_KEY_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 WEEK_KEY_PATTERN = re.compile(r"^week:(\d{4}-\d{2}-\d{2})$")
+CARRYOVER_LOOKBACK_DAYS = 370
 
 
 def _current_user_id() -> int:
@@ -47,6 +49,8 @@ def current_week_state_key() -> str:
 
 def normalize_state_key(raw: str | None, repeat_type: str) -> str:
     value = (raw or "").strip()
+    if DATE_KEY_PATTERN.fullmatch(value):
+        return value
     if re.fullmatch(r"\d{4}-\d{2}", value):
         return value
     if WEEK_KEY_PATTERN.fullmatch(value):
@@ -56,30 +60,79 @@ def normalize_state_key(raw: str | None, repeat_type: str) -> str:
     return normalize_month_key(value)
 
 
-def get_occurrence_date_keys(month_key: str, repeat_type: str, due_day: int, repeat_weekday: int) -> list[str]:
+def _parse_date_key(raw: str | None) -> date | None:
+    value = (raw or "").strip()[:10]
+    if not DATE_KEY_PATTERN.fullmatch(value):
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _month_bounds(month_key: str) -> tuple[date, date]:
     year, month = month_key.split("-")
     year_num = int(year)
     month_num = int(month)
     days_in_month = monthrange(year_num, month_num)[1]
+    return date(year_num, month_num, 1), date(year_num, month_num, days_in_month)
 
+
+def _next_month(point: date) -> date:
+    if point.month == 12:
+        return date(point.year + 1, 1, 1)
+    return date(point.year, point.month + 1, 1)
+
+
+def get_occurrence_date_keys(month_key: str, repeat_type: str, due_day: int, repeat_weekday: int) -> list[str]:
+    month_start, month_end = _month_bounds(month_key)
+    return [item.isoformat() for item in get_occurrence_dates(month_start, month_end, repeat_type, due_day, repeat_weekday)]
+
+
+def get_occurrence_dates(start_day: date, end_day: date, repeat_type: str, due_day: int, repeat_weekday: int) -> list[date]:
+    if end_day < start_day:
+        return []
     if repeat_type == "weekly":
-        entries: list[str] = []
-        for day in range(1, days_in_month + 1):
-            point = date(year_num, month_num, day)
-            if point.isoweekday() == repeat_weekday:
-                entries.append(point.isoformat())
+        entries: list[date] = []
+        offset = (repeat_weekday - start_day.isoweekday()) % 7
+        point = start_day + timedelta(days=offset)
+        while point <= end_day:
+            entries.append(point)
+            point += timedelta(days=7)
         return entries
 
     if due_day <= 0:
         return []
-    normalized_day = min(days_in_month, max(1, due_day))
-    return [f"{year_num:04d}-{month_num:02d}-{normalized_day:02d}"]
+
+    entries: list[date] = []
+    cursor = date(start_day.year, start_day.month, 1)
+    while cursor <= end_day:
+        days_in_month = monthrange(cursor.year, cursor.month)[1]
+        normalized_day = min(days_in_month, max(1, due_day))
+        point = date(cursor.year, cursor.month, normalized_day)
+        if start_day <= point <= end_day:
+            entries.append(point)
+        cursor = _next_month(cursor)
+    return entries
+
+
+def _legacy_state_key(repeat_type: str, date_key: str) -> str:
+    if repeat_type == "weekly":
+        return to_week_state_key(date_key)
+    return date_key[:7]
 
 
 @router.get("/monthly-tasks")
 def get_monthly_tasks(month: str = Query(default="")):
     user_id = _current_user_id()
     month_key = normalize_month_key(month)
+    month_start, month_end = _month_bounds(month_key)
+    today = date.today()
+    current_month_key = today.isoformat()[:7]
+    carryover_enabled = month_key == current_month_key
+    occurrence_start = month_start
+    if carryover_enabled:
+        occurrence_start = max(date(1970, 1, 1), today - timedelta(days=CARRYOVER_LOOKBACK_DAYS))
     with get_db() as conn:
         base_rows = conn.execute(
             """
@@ -126,45 +179,78 @@ def get_monthly_tasks(month: str = Query(default="")):
         repeat_weekday = normalize_repeat_weekday(row["repeat_weekday"])
         due_day = min(31, parse_non_negative_int(row["due_day"]))
         due_time = normalize_due_time(row["due_time"] or "", default="23:59") or "23:59"
+        created_day = _parse_date_key(row["created_at"] or "")
+        task_occurrence_start = max(occurrence_start, created_day) if created_day else occurrence_start
 
-        occurrence_date_keys = get_occurrence_date_keys(
-            month_key=month_key,
+        occurrence_days = get_occurrence_dates(
+            start_day=task_occurrence_start,
+            end_day=month_end,
             repeat_type=repeat_type,
             due_day=due_day,
             repeat_weekday=repeat_weekday,
         )
-        if not occurrence_date_keys:
-            occurrence_date_keys = [""]
+        if not occurrence_days and not carryover_enabled:
+            occurrence_days = []
 
-        for date_key in occurrence_date_keys:
-            state_key = to_week_state_key(date_key) if repeat_type == "weekly" and date_key else month_key
-            state = states_by_key.get((task_id, state_key), {"done": False, "note": "", "updated_at": ""})
-            done = bool(state["done"])
-            if done:
-                done_count += 1
-            items.append(
-                {
-                    "id": task_id,
-                    "instance_id": f"{task_id}:{state_key}:{date_key or 'none'}",
-                    "name": row["name"] or "",
-                    "due_day": due_day,
-                    "due_time": due_time,
-                    "repeat_type": repeat_type,
-                    "repeat_weekday": repeat_weekday,
-                    "date_key": date_key,
-                    "state_key": state_key,
-                    "done": done,
-                    "note": state["note"],
-                    "state_updated_at": state["updated_at"],
-                    "created_at": row["created_at"] or "",
-                    "updated_at": row["updated_at"] or "",
-                    "month_key": month_key,
-                }
+        task_items = []
+        carryover_item = None
+
+        for occurrence_day in occurrence_days:
+            date_key = occurrence_day.isoformat()
+            state_key = date_key
+            legacy_key = _legacy_state_key(repeat_type, date_key)
+            state = (
+                states_by_key.get((task_id, state_key))
+                or states_by_key.get((task_id, legacy_key))
+                or {"done": False, "note": "", "updated_at": ""}
             )
+            done = bool(state["done"])
+            display_day = occurrence_day
+            overdue = False
+            if carryover_enabled and not done and occurrence_day < today:
+                display_day = today
+                overdue = True
+            item = {
+                "id": task_id,
+                "instance_id": f"{task_id}:{state_key}:{display_day.isoformat()}",
+                "name": row["name"] or "",
+                "due_day": due_day,
+                "due_time": due_time,
+                "repeat_type": repeat_type,
+                "repeat_weekday": repeat_weekday,
+                "date_key": date_key,
+                "display_date_key": display_day.isoformat(),
+                "state_key": state_key,
+                "legacy_state_key": legacy_key,
+                "overdue": overdue,
+                "done": done,
+                "note": state["note"],
+                "state_updated_at": state["updated_at"],
+                "created_at": row["created_at"] or "",
+                "updated_at": row["updated_at"] or "",
+                "month_key": month_key,
+            }
+            if overdue:
+                if carryover_item is None or date_key < carryover_item["date_key"]:
+                    carryover_item = item
+                continue
+            if display_day < month_start or display_day > month_end:
+                continue
+            task_items.append(item)
+
+        if carryover_item is not None:
+            task_items = [item for item in task_items if item["done"]]
+            task_items.append(carryover_item)
+
+        for item in task_items:
+            if item["done"]:
+                done_count += 1
+            items.append(item)
 
     items = sorted(
         items,
         key=lambda item: (
+            item["display_date_key"] or item["date_key"] or "9999-99-99",
             item["date_key"] or "9999-99-99",
             item["name"].lower(),
             int(item["id"]),
@@ -187,7 +273,7 @@ def add_monthly_task(payload: MonthlyTaskCreate):
     user_id = _current_user_id()
     name = (payload.name or "").strip()
     if not name:
-        raise HTTPException(status_code=400, detail="Nazwa zadania miesiecznego nie moze byc pusta")
+        raise HTTPException(status_code=400, detail="Nazwa zadania cyklicznego nie moze byc pusta")
     repeat_type = normalize_repeat_type(payload.repeat_type)
     due_day = min(31, parse_non_negative_int(payload.due_day)) if repeat_type == "monthly" else 0
     due_time = normalize_due_time(payload.due_time, default="23:59") or "23:59"
@@ -221,7 +307,7 @@ def update_monthly_task(task_id: int, payload: MonthlyTaskUpdate):
     user_id = _current_user_id()
     name = (payload.name or "").strip()
     if not name:
-        raise HTTPException(status_code=400, detail="Nazwa zadania miesiecznego nie moze byc pusta")
+        raise HTTPException(status_code=400, detail="Nazwa zadania cyklicznego nie moze byc pusta")
     repeat_type = normalize_repeat_type(payload.repeat_type)
     due_day = min(31, parse_non_negative_int(payload.due_day)) if repeat_type == "monthly" else 0
     due_time = normalize_due_time(payload.due_time, default="23:59") or "23:59"
@@ -234,7 +320,7 @@ def update_monthly_task(task_id: int, payload: MonthlyTaskUpdate):
             (task_id, user_id),
         ).fetchone()
         if not exists:
-            raise HTTPException(status_code=404, detail="Zadanie miesieczne nie znalezione")
+            raise HTTPException(status_code=404, detail="Zadanie cykliczne nie znalezione")
 
         conn.execute(
             """
@@ -267,7 +353,7 @@ def delete_monthly_task(task_id: int):
             (task_id, user_id),
         ).fetchone()
         if not exists:
-            raise HTTPException(status_code=404, detail="Zadanie miesieczne nie znalezione")
+            raise HTTPException(status_code=404, detail="Zadanie cykliczne nie znalezione")
 
         conn.execute("DELETE FROM monthly_tasks WHERE id = ?", (task_id,))
         conn.commit()
@@ -284,7 +370,7 @@ def update_monthly_task_state(task_id: int, payload: MonthlyTaskStatePayload):
             (task_id, user_id),
         ).fetchone()
         if not task_exists:
-            raise HTTPException(status_code=404, detail="Zadanie miesieczne nie znalezione")
+            raise HTTPException(status_code=404, detail="Zadanie cykliczne nie znalezione")
         repeat_type = normalize_repeat_type(task_exists["repeat_type"] or "monthly")
         state_key = normalize_state_key(payload.month_key, repeat_type)
 

@@ -43,14 +43,15 @@ def _normalize_reminder_time(raw: str | None) -> str:
 
 def _row_to_item(row, state, date_key: str) -> dict:
     schedule_type = normalize_medication_schedule_type(row["schedule_type"])
-    scheduled_today = is_medication_scheduled_for_date(schedule_type, date_key)
+    active = bool(row["active"])
+    scheduled_today = active and is_medication_scheduled_for_date(schedule_type, date_key)
     done = bool(state["done"]) if state else False
     return {
         "id": int(row["id"]),
         "name": row["name"] or "",
         "schedule_type": schedule_type,
         "reminder_time": _normalize_reminder_time(row["reminder_time"]),
-        "active": bool(row["active"]),
+        "active": active,
         "date_key": date_key,
         "scheduled_today": scheduled_today,
         "done": done,
@@ -70,8 +71,8 @@ def get_medications(date_key: str = Query(default="", alias="date")):
             """
             SELECT id, name, schedule_type, reminder_time, active, created_at, updated_at
             FROM medication_reminders
-            WHERE active = 1 AND owner_user_id = ?
-            ORDER BY reminder_time ASC, name COLLATE NOCASE ASC, id ASC
+            WHERE owner_user_id = ?
+            ORDER BY active DESC, reminder_time ASC, name COLLATE NOCASE ASC, id ASC
             """,
             (user_id,),
         ).fetchall()
@@ -91,11 +92,14 @@ def get_medications(date_key: str = Query(default="", alias="date")):
     items = [_row_to_item(row, states.get(int(row["id"])), clean_date) for row in rows]
     scheduled_items = [item for item in items if item["scheduled_today"]]
     done_count = sum(1 for item in scheduled_items if item["done"])
+    active_count = sum(1 for item in items if item["active"])
     return {
         "date_key": clean_date,
         "items": items,
         "summary": {
             "total": len(items),
+            "active": active_count,
+            "paused": len(items) - active_count,
             "scheduled": len(scheduled_items),
             "done": done_count,
             "open": len(scheduled_items) - done_count,

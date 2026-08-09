@@ -23,6 +23,40 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) 
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
 
 
+def _assign_orphan_tasks_to_inbox(conn: sqlite3.Connection) -> None:
+    owners = conn.execute(
+        """
+        SELECT DISTINCT owner_user_id
+        FROM tasks
+        WHERE module_id IS NULL AND owner_user_id IS NOT NULL
+        """
+    ).fetchall()
+    for owner in owners:
+        owner_user_id = int(owner["owner_user_id"])
+        inbox = conn.execute(
+            """
+            SELECT id
+            FROM modules
+            WHERE owner_user_id = ? AND LOWER(TRIM(name)) = 'do przypisania'
+            ORDER BY id
+            LIMIT 1
+            """,
+            (owner_user_id,),
+        ).fetchone()
+        if inbox:
+            inbox_id = int(inbox["id"])
+        else:
+            cursor = conn.execute(
+                "INSERT INTO modules (name, category, owner_user_id) VALUES ('Do przypisania', 'praca', ?)",
+                (owner_user_id,),
+            )
+            inbox_id = int(cursor.lastrowid)
+        conn.execute(
+            "UPDATE tasks SET module_id = ? WHERE owner_user_id = ? AND module_id IS NULL",
+            (inbox_id, owner_user_id),
+        )
+
+
 
 def _init_db() -> None:
     with _connect_db(DATABASE_PATH) as conn:
@@ -262,14 +296,21 @@ def _init_db() -> None:
             CREATE TABLE IF NOT EXISTS notification_settings (
                 owner_user_id INTEGER PRIMARY KEY,
                 enabled INTEGER NOT NULL DEFAULT 1,
+                quiet_hours_enabled INTEGER NOT NULL DEFAULT 1,
+                quiet_hours_start TEXT NOT NULL DEFAULT '22:00',
+                quiet_hours_end TEXT NOT NULL DEFAULT '07:00',
                 opening_enabled INTEGER NOT NULL DEFAULT 1,
                 opening_time TEXT NOT NULL DEFAULT '08:00',
                 day_summary_enabled INTEGER NOT NULL DEFAULT 1,
                 day_summary_time TEXT NOT NULL DEFAULT '20:30',
                 medication_enabled INTEGER NOT NULL DEFAULT 1,
+                medication_repeat_enabled INTEGER NOT NULL DEFAULT 0,
                 medication_repeat_minutes INTEGER NOT NULL DEFAULT 5,
+                medication_repeat_window_minutes INTEGER NOT NULL DEFAULT 120,
+                task_due_enabled INTEGER NOT NULL DEFAULT 1,
                 task_reminder_enabled INTEGER NOT NULL DEFAULT 1,
                 task_reminder_repeat_minutes INTEGER NOT NULL DEFAULT 120,
+                task_reminder_window_minutes INTEGER NOT NULL DEFAULT 480,
                 timezone TEXT NOT NULL DEFAULT 'Europe/Warsaw',
                 updated_at TEXT NOT NULL DEFAULT '',
                 FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE
@@ -290,6 +331,29 @@ def _init_db() -> None:
             """
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_notification_delivery_markers_owner ON notification_delivery_markers(owner_user_id, marker_key)")
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS notification_delivery_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner_user_id INTEGER NOT NULL,
+                kind TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL DEFAULT '',
+                body TEXT NOT NULL DEFAULT '',
+                reason TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT '',
+                sent_count INTEGER NOT NULL DEFAULT 0,
+                failed_count INTEGER NOT NULL DEFAULT 0,
+                marker_key TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT '',
+                FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_notification_history_owner_created "
+            "ON notification_delivery_history(owner_user_id, created_at DESC, id DESC)"
+        )
 
         conn.execute(
             """
@@ -378,14 +442,21 @@ def _init_db() -> None:
         _ensure_column(conn, "push_subscriptions", "last_success_at", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "push_subscriptions", "last_error", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "notification_settings", "enabled", "INTEGER NOT NULL DEFAULT 1")
+        _ensure_column(conn, "notification_settings", "quiet_hours_enabled", "INTEGER NOT NULL DEFAULT 1")
+        _ensure_column(conn, "notification_settings", "quiet_hours_start", "TEXT NOT NULL DEFAULT '22:00'")
+        _ensure_column(conn, "notification_settings", "quiet_hours_end", "TEXT NOT NULL DEFAULT '07:00'")
         _ensure_column(conn, "notification_settings", "opening_enabled", "INTEGER NOT NULL DEFAULT 1")
         _ensure_column(conn, "notification_settings", "opening_time", "TEXT NOT NULL DEFAULT '08:00'")
         _ensure_column(conn, "notification_settings", "day_summary_enabled", "INTEGER NOT NULL DEFAULT 1")
         _ensure_column(conn, "notification_settings", "day_summary_time", "TEXT NOT NULL DEFAULT '20:30'")
         _ensure_column(conn, "notification_settings", "medication_enabled", "INTEGER NOT NULL DEFAULT 1")
+        _ensure_column(conn, "notification_settings", "medication_repeat_enabled", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(conn, "notification_settings", "medication_repeat_minutes", "INTEGER NOT NULL DEFAULT 5")
+        _ensure_column(conn, "notification_settings", "medication_repeat_window_minutes", "INTEGER NOT NULL DEFAULT 120")
+        _ensure_column(conn, "notification_settings", "task_due_enabled", "INTEGER NOT NULL DEFAULT 1")
         _ensure_column(conn, "notification_settings", "task_reminder_enabled", "INTEGER NOT NULL DEFAULT 1")
         _ensure_column(conn, "notification_settings", "task_reminder_repeat_minutes", "INTEGER NOT NULL DEFAULT 120")
+        _ensure_column(conn, "notification_settings", "task_reminder_window_minutes", "INTEGER NOT NULL DEFAULT 480")
         _ensure_column(conn, "notification_settings", "timezone", "TEXT NOT NULL DEFAULT 'Europe/Warsaw'")
         _ensure_column(conn, "notification_settings", "updated_at", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "debts", "place", "TEXT NOT NULL DEFAULT ''")
@@ -410,7 +481,7 @@ def _init_db() -> None:
         conn.execute("UPDATE tasks SET due_date = '' WHERE due_date IS NULL")
         conn.execute("UPDATE tasks SET due_time = '' WHERE due_time IS NULL")
         conn.execute("UPDATE tasks SET due_time = '' WHERE TRIM(due_date) = ''")
-        conn.execute("UPDATE tasks SET reminder_offset_minutes = 0 WHERE reminder_offset_minutes IS NULL OR reminder_offset_minutes < 0")
+        conn.execute("UPDATE tasks SET reminder_offset_minutes = 0 WHERE reminder_offset_minutes IS NULL OR reminder_offset_minutes < -1")
         conn.execute("UPDATE tasks SET estimated_time = 0 WHERE estimated_time IS NULL")
         conn.execute("UPDATE tasks SET points_weight = 1 WHERE points_weight IS NULL OR points_weight <= 0")
         conn.execute("UPDATE tasks SET status = 'przygotowanie' WHERE status IN ('analiza', 'wstepne')")
@@ -460,6 +531,10 @@ def _init_db() -> None:
         conn.execute("UPDATE push_subscriptions SET last_error = '' WHERE last_error IS NULL")
         conn.execute("UPDATE notification_settings SET enabled = 1 WHERE enabled IS NULL")
         conn.execute("UPDATE notification_settings SET enabled = 1 WHERE enabled NOT IN (0, 1)")
+        conn.execute("UPDATE notification_settings SET quiet_hours_enabled = 1 WHERE quiet_hours_enabled IS NULL")
+        conn.execute("UPDATE notification_settings SET quiet_hours_enabled = 1 WHERE quiet_hours_enabled NOT IN (0, 1)")
+        conn.execute("UPDATE notification_settings SET quiet_hours_start = '22:00' WHERE quiet_hours_start IS NULL OR TRIM(quiet_hours_start) = ''")
+        conn.execute("UPDATE notification_settings SET quiet_hours_end = '07:00' WHERE quiet_hours_end IS NULL OR TRIM(quiet_hours_end) = ''")
         conn.execute("UPDATE notification_settings SET opening_enabled = 1 WHERE opening_enabled IS NULL")
         conn.execute("UPDATE notification_settings SET opening_enabled = 1 WHERE opening_enabled NOT IN (0, 1)")
         conn.execute("UPDATE notification_settings SET opening_time = '08:00' WHERE opening_time IS NULL OR TRIM(opening_time) = ''")
@@ -468,13 +543,20 @@ def _init_db() -> None:
         conn.execute("UPDATE notification_settings SET day_summary_time = '20:30' WHERE day_summary_time IS NULL OR TRIM(day_summary_time) = ''")
         conn.execute("UPDATE notification_settings SET medication_enabled = 1 WHERE medication_enabled IS NULL")
         conn.execute("UPDATE notification_settings SET medication_enabled = 1 WHERE medication_enabled NOT IN (0, 1)")
+        conn.execute("UPDATE notification_settings SET medication_repeat_enabled = 0 WHERE medication_repeat_enabled IS NULL")
+        conn.execute("UPDATE notification_settings SET medication_repeat_enabled = 0 WHERE medication_repeat_enabled NOT IN (0, 1)")
         conn.execute("UPDATE notification_settings SET medication_repeat_minutes = 5 WHERE medication_repeat_minutes IS NULL OR medication_repeat_minutes < 1")
+        conn.execute("UPDATE notification_settings SET medication_repeat_window_minutes = 120 WHERE medication_repeat_window_minutes IS NULL OR medication_repeat_window_minutes < 1")
+        conn.execute("UPDATE notification_settings SET task_due_enabled = 1 WHERE task_due_enabled IS NULL")
+        conn.execute("UPDATE notification_settings SET task_due_enabled = 1 WHERE task_due_enabled NOT IN (0, 1)")
         conn.execute("UPDATE notification_settings SET task_reminder_enabled = 1 WHERE task_reminder_enabled IS NULL")
         conn.execute("UPDATE notification_settings SET task_reminder_enabled = 1 WHERE task_reminder_enabled NOT IN (0, 1)")
         conn.execute("UPDATE notification_settings SET task_reminder_repeat_minutes = 120 WHERE task_reminder_repeat_minutes IS NULL OR task_reminder_repeat_minutes < 15")
+        conn.execute("UPDATE notification_settings SET task_reminder_window_minutes = 480 WHERE task_reminder_window_minutes IS NULL OR task_reminder_window_minutes < 15")
         conn.execute("UPDATE notification_settings SET timezone = 'Europe/Warsaw' WHERE timezone IS NULL OR TRIM(timezone) = ''")
         conn.execute("UPDATE notification_settings SET updated_at = '' WHERE updated_at IS NULL")
         conn.execute("DELETE FROM notification_delivery_markers WHERE marker_key LIKE 'telegram-%' OR marker_key LIKE 'telegram:%'")
+        _assign_orphan_tasks_to_inbox(conn)
         conn.execute("UPDATE debts SET place = '' WHERE place IS NULL")
         conn.execute("UPDATE debts SET kind = 'debt' WHERE kind IS NULL OR TRIM(kind) = ''")
         conn.execute("UPDATE debts SET kind = 'fixed' WHERE kind IN ('cost', 'fixed_cost', 'koszt')")

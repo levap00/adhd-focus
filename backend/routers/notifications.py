@@ -1,24 +1,37 @@
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Query
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from backend.accounts import get_user_by_username
 from backend.auth import get_request_user
 from backend.db import get_db
 from backend.schemas import NotificationSettingsPayload, PushSubscriptionPayload
 from backend.utils import normalize_due_time, utc_now_iso
-from backend.web_push import get_vapid_public_key, is_web_push_configured, send_notification_to_user
+from backend.web_push import (
+    get_vapid_public_key,
+    is_web_push_configured,
+    record_notification_history,
+    send_notification_to_user,
+)
 
 router = APIRouter()
 
 DEFAULT_SETTINGS = {
     "enabled": True,
+    "quiet_hours_enabled": True,
+    "quiet_hours_start": "22:00",
+    "quiet_hours_end": "07:00",
     "opening_enabled": True,
     "opening_time": "08:00",
     "day_summary_enabled": True,
     "day_summary_time": "20:30",
     "medication_enabled": True,
+    "medication_repeat_enabled": False,
     "medication_repeat_minutes": 5,
+    "medication_repeat_window_minutes": 120,
+    "task_due_enabled": True,
     "task_reminder_enabled": True,
     "task_reminder_repeat_minutes": 120,
+    "task_reminder_window_minutes": 480,
     "timezone": "Europe/Warsaw",
 }
 
@@ -35,14 +48,21 @@ def _settings_from_row(row) -> dict:
         return dict(DEFAULT_SETTINGS)
     return {
         "enabled": bool(row["enabled"]),
+        "quiet_hours_enabled": bool(row["quiet_hours_enabled"]),
+        "quiet_hours_start": normalize_due_time(row["quiet_hours_start"], "22:00") or "22:00",
+        "quiet_hours_end": normalize_due_time(row["quiet_hours_end"], "07:00") or "07:00",
         "opening_enabled": bool(row["opening_enabled"]),
         "opening_time": normalize_due_time(row["opening_time"], "08:00") or "08:00",
         "day_summary_enabled": bool(row["day_summary_enabled"]),
         "day_summary_time": normalize_due_time(row["day_summary_time"], "20:30") or "20:30",
         "medication_enabled": bool(row["medication_enabled"]),
+        "medication_repeat_enabled": bool(row["medication_repeat_enabled"]),
         "medication_repeat_minutes": max(1, int(row["medication_repeat_minutes"] or 5)),
+        "medication_repeat_window_minutes": max(1, int(row["medication_repeat_window_minutes"] or 120)),
+        "task_due_enabled": bool(row["task_due_enabled"]),
         "task_reminder_enabled": bool(row["task_reminder_enabled"]),
         "task_reminder_repeat_minutes": max(15, int(row["task_reminder_repeat_minutes"] or 120)),
+        "task_reminder_window_minutes": max(15, int(row["task_reminder_window_minutes"] or 480)),
         "timezone": (row["timezone"] or "Europe/Warsaw").strip() or "Europe/Warsaw",
     }
 
@@ -50,9 +70,11 @@ def _settings_from_row(row) -> dict:
 def _ensure_settings(conn, user_id: int) -> dict:
     row = conn.execute(
         """
-        SELECT enabled, opening_enabled, opening_time, day_summary_enabled, day_summary_time,
-               medication_enabled, medication_repeat_minutes, task_reminder_enabled,
-               task_reminder_repeat_minutes, timezone
+        SELECT enabled, quiet_hours_enabled, quiet_hours_start, quiet_hours_end,
+               opening_enabled, opening_time, day_summary_enabled, day_summary_time,
+               medication_enabled, medication_repeat_enabled, medication_repeat_minutes,
+               medication_repeat_window_minutes, task_due_enabled, task_reminder_enabled,
+               task_reminder_repeat_minutes, task_reminder_window_minutes, timezone
         FROM notification_settings
         WHERE owner_user_id = ?
         """,
@@ -65,11 +87,13 @@ def _ensure_settings(conn, user_id: int) -> dict:
     conn.execute(
         """
         INSERT INTO notification_settings (
-            owner_user_id, enabled, opening_enabled, opening_time, day_summary_enabled,
-            day_summary_time, medication_enabled, medication_repeat_minutes,
-            task_reminder_enabled, task_reminder_repeat_minutes, timezone, updated_at
+            owner_user_id, enabled, quiet_hours_enabled, quiet_hours_start, quiet_hours_end,
+            opening_enabled, opening_time, day_summary_enabled, day_summary_time,
+            medication_enabled, medication_repeat_enabled, medication_repeat_minutes,
+            medication_repeat_window_minutes, task_due_enabled, task_reminder_enabled,
+            task_reminder_repeat_minutes, task_reminder_window_minutes, timezone, updated_at
         )
-        VALUES (?, 1, 1, '08:00', 1, '20:30', 1, 5, 1, 120, 'Europe/Warsaw', ?)
+        VALUES (?, 1, 1, '22:00', '07:00', 1, '08:00', 1, '20:30', 1, 0, 5, 120, 1, 1, 120, 480, 'Europe/Warsaw', ?)
         """,
         (user_id, now),
     )
@@ -114,55 +138,100 @@ def get_notification_settings():
     }
 
 
+@router.get("/notifications/history")
+def get_notification_history(limit: int = Query(default=25, ge=1, le=100)):
+    user_id = _current_user_id()
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, kind, title, body, reason, status, sent_count, failed_count, created_at
+            FROM notification_delivery_history
+            WHERE owner_user_id = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT ?
+            """,
+            (user_id, limit),
+        ).fetchall()
+    return {"items": [dict(row) for row in rows]}
+
+
 @router.put("/notifications/settings")
 def update_notification_settings(payload: NotificationSettingsPayload):
     user_id = _current_user_id()
+    timezone = (payload.timezone or "Europe/Warsaw").strip()[:64] or "Europe/Warsaw"
+    try:
+        ZoneInfo(timezone)
+    except (ZoneInfoNotFoundError, ValueError):
+        raise HTTPException(status_code=400, detail="Niepoprawna strefa czasowa.")
     settings = {
         "enabled": 1 if payload.enabled else 0,
+        "quiet_hours_enabled": 1 if payload.quiet_hours_enabled else 0,
+        "quiet_hours_start": normalize_due_time(payload.quiet_hours_start, "22:00") or "22:00",
+        "quiet_hours_end": normalize_due_time(payload.quiet_hours_end, "07:00") or "07:00",
         "opening_enabled": 1 if payload.opening_enabled else 0,
         "opening_time": normalize_due_time(payload.opening_time, "08:00") or "08:00",
         "day_summary_enabled": 1 if payload.day_summary_enabled else 0,
         "day_summary_time": normalize_due_time(payload.day_summary_time, "20:30") or "20:30",
         "medication_enabled": 1 if payload.medication_enabled else 0,
+        "medication_repeat_enabled": 1 if payload.medication_repeat_enabled else 0,
         "medication_repeat_minutes": _clean_minutes(payload.medication_repeat_minutes, 5, 1, 1440),
+        "medication_repeat_window_minutes": _clean_minutes(payload.medication_repeat_window_minutes, 120, 1, 1440),
+        "task_due_enabled": 1 if payload.task_due_enabled else 0,
         "task_reminder_enabled": 1 if payload.task_reminder_enabled else 0,
         "task_reminder_repeat_minutes": _clean_minutes(payload.task_reminder_repeat_minutes, 120, 15, 1440),
-        "timezone": (payload.timezone or "Europe/Warsaw").strip()[:64] or "Europe/Warsaw",
+        "task_reminder_window_minutes": _clean_minutes(payload.task_reminder_window_minutes, 480, 15, 10080),
+        "timezone": timezone,
     }
     now = utc_now_iso()
     with get_db() as conn:
         conn.execute(
             """
             INSERT INTO notification_settings (
-                owner_user_id, enabled, opening_enabled, opening_time, day_summary_enabled,
-                day_summary_time, medication_enabled, medication_repeat_minutes,
-                task_reminder_enabled, task_reminder_repeat_minutes, timezone, updated_at
+                owner_user_id, enabled, quiet_hours_enabled, quiet_hours_start, quiet_hours_end,
+                opening_enabled, opening_time, day_summary_enabled, day_summary_time,
+                medication_enabled, medication_repeat_enabled, medication_repeat_minutes,
+                medication_repeat_window_minutes, task_due_enabled, task_reminder_enabled,
+                task_reminder_repeat_minutes, task_reminder_window_minutes, timezone, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(owner_user_id) DO UPDATE SET
                 enabled = excluded.enabled,
+                quiet_hours_enabled = excluded.quiet_hours_enabled,
+                quiet_hours_start = excluded.quiet_hours_start,
+                quiet_hours_end = excluded.quiet_hours_end,
                 opening_enabled = excluded.opening_enabled,
                 opening_time = excluded.opening_time,
                 day_summary_enabled = excluded.day_summary_enabled,
                 day_summary_time = excluded.day_summary_time,
                 medication_enabled = excluded.medication_enabled,
+                medication_repeat_enabled = excluded.medication_repeat_enabled,
                 medication_repeat_minutes = excluded.medication_repeat_minutes,
+                medication_repeat_window_minutes = excluded.medication_repeat_window_minutes,
+                task_due_enabled = excluded.task_due_enabled,
                 task_reminder_enabled = excluded.task_reminder_enabled,
                 task_reminder_repeat_minutes = excluded.task_reminder_repeat_minutes,
+                task_reminder_window_minutes = excluded.task_reminder_window_minutes,
                 timezone = excluded.timezone,
                 updated_at = excluded.updated_at
             """,
             (
                 user_id,
                 settings["enabled"],
+                settings["quiet_hours_enabled"],
+                settings["quiet_hours_start"],
+                settings["quiet_hours_end"],
                 settings["opening_enabled"],
                 settings["opening_time"],
                 settings["day_summary_enabled"],
                 settings["day_summary_time"],
                 settings["medication_enabled"],
+                settings["medication_repeat_enabled"],
                 settings["medication_repeat_minutes"],
+                settings["medication_repeat_window_minutes"],
+                settings["task_due_enabled"],
                 settings["task_reminder_enabled"],
                 settings["task_reminder_repeat_minutes"],
+                settings["task_reminder_window_minutes"],
                 settings["timezone"],
                 now,
             ),
@@ -243,17 +312,24 @@ def send_test_notification():
     if count <= 0:
         raise HTTPException(status_code=400, detail="Najpierw wlacz powiadomienia na tym urzadzeniu.")
 
-    result = send_notification_to_user(
+    test_marker = f"webpush-test:{utc_now_iso()}"
+    test_payload = {
+        "title": "Test powiadomienia",
+        "body": "Web Push dziala dla tej aplikacji.",
+        "tag": test_marker,
+        "url": "/",
+        "icon": "/static/apple-touch-icon.png",
+        "badge": "/static/apple-touch-icon.png",
+        "renotify": True,
+    }
+    result = send_notification_to_user(user_id, test_payload)
+    record_notification_history(
         user_id,
-        {
-            "title": "Test powiadomienia",
-            "body": "Web Push dziala dla tej aplikacji.",
-            "tag": f"webpush-test:{utc_now_iso()}",
-            "url": "/",
-            "icon": "/static/apple-touch-icon.png",
-            "badge": "/static/apple-touch-icon.png",
-            "renotify": True,
-        },
+        test_payload,
+        "test",
+        "Ręczny test uruchomiony w ustawieniach powiadomień.",
+        result,
+        test_marker,
     )
     if int(result.get("sent") or 0) <= 0:
         raise HTTPException(

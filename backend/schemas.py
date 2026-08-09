@@ -164,12 +164,19 @@ class PushSubscriptionPayload(BaseModel):
 
 class NotificationSettingsPayload(BaseModel):
     enabled: bool = True
+    quiet_hours_enabled: bool = True
+    quiet_hours_start: str = "22:00"
+    quiet_hours_end: str = "07:00"
     opening_enabled: bool = True
     opening_time: str = "08:00"
     day_summary_enabled: bool = True
     day_summary_time: str = "20:30"
     medication_enabled: bool = True
+    medication_repeat_enabled: bool = False
     medication_repeat_minutes: int = 5
+    medication_repeat_window_minutes: int = 120
+    task_due_enabled: bool = True
     task_reminder_enabled: bool = True
     task_reminder_repeat_minutes: int = 120
+    task_reminder_window_minutes: int = 480
     timezone: str = "Europe/Warsaw"

@@ -7,7 +7,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/app.css?v=20260629-1">
+    <link rel="stylesheet" href="/static/app.css?v=20260731-3">
     <meta name="apple-mobile-web-app-capable" content="yes">
 
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
@@ -18,10 +18,10 @@
 
     <link rel="manifest" href="/static/manifest.json">
     <script src="https://cdn.tailwindcss.com"></script>
-    <script defer src="/static/app.js?v=20260629-1"></script>
+    <script defer src="/static/app.js?v=20260731-3"></script>
     <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
 </head>
-<body x-data="app()" x-init="init()" @keydown.window="handleKeydown($event)" @resize.window="handleViewportResize()" @pointermove.window="moveCanvasDrag($event)" @pointerup.window="endCanvasDrag()" :class="[theme === 'dark' ? 'theme-dark' : 'theme-light', taskModal ? 'modal-open' : '']">
+<body x-data="app()" x-init="init()" @keydown.window="handleKeydown($event)" @resize.window="handleViewportResize()" @pointermove.window="moveCanvasDrag($event)" @pointerup.window="endCanvasDrag()" :class="[theme === 'dark' ? 'theme-dark' : 'theme-light', (taskModal || monthlyTaskModal || debtModal) ? 'modal-open' : '', keyboardOpen ? 'keyboard-open' : '']">
     <div class="min-h-screen">
         <header class="topbar z-40 border-b border-slate-200/70">
             <div class="mx-auto max-w-[1850px] px-4 py-2 md:px-6">
@@ -56,7 +56,7 @@
                                         <button @click="openBrainDumpAction()" type="button" class="settings-tool-btn">Brain dump</button>
                                         <button @click="navigateUtilityView('canvas')" type="button" class="settings-tool-btn">Mapa / Canva</button>
                                         <button @click="navigateUtilityView('docs')" type="button" class="settings-tool-btn">Dokumenty</button>
-                                        <button @click="navigateUtilityView('monthly')" type="button" class="settings-tool-btn">Miesieczne</button>
+                                        <button @click="navigateUtilityView('monthly')" type="button" class="settings-tool-btn">Cykliczne</button>
                                         <button @click="navigateUtilityView('meds')" type="button" class="settings-tool-btn">Leki</button>
                                         <button @click="navigateUtilityView('debts')" type="button" class="settings-tool-btn">Finanse</button>
                                         <button @click="navigateUtilityView('notifications')" type="button" class="settings-tool-btn">Powiadomienia</button>
@@ -79,13 +79,7 @@
                     <button @click="navigateMainView('kanban')" :class="view === 'kanban' ? 'is-active' : ''" type="button">Zadania</button>
                     <button @click="navigateMainView('global')" :class="view === 'global' ? 'is-active' : ''" type="button">Moduly</button>
                     <button @click="navigateMainView('calendar')" :class="view === 'calendar' ? 'is-active' : ''" type="button">Kalendarz</button>
-                    <button @click="navigateUtilityView('brain')" :class="view === 'brain' ? 'is-active' : ''" type="button">Brain dump</button>
-                    <button @click="navigateUtilityView('canvas')" :class="view === 'canvas' ? 'is-active' : ''" type="button">Mapa</button>
-                    <button @click="navigateUtilityView('docs')" :class="view === 'docs' ? 'is-active' : ''" type="button">Dokumenty</button>
-                    <button @click="navigateUtilityView('monthly')" :class="view === 'monthly' ? 'is-active' : ''" type="button">Miesieczne</button>
-                    <button @click="navigateUtilityView('meds')" :class="view === 'meds' ? 'is-active' : ''" type="button">Leki</button>
-                    <button @click="navigateUtilityView('debts')" :class="view === 'debts' ? 'is-active' : ''" type="button">Finanse</button>
-                    <button @click="closeOverlayMenus(); startFlow()" :class="view === 'flow' ? 'is-active' : ''" type="button">Flow</button>
+                    <button @click.stop="fabOpen = false; settingsMenuOpen = true" :class="['brain', 'canvas', 'docs', 'monthly', 'meds', 'debts', 'notifications', 'flow'].includes(view) ? 'is-active' : ''" type="button">Narzędzia</button>
                 </nav>
 
                 <div class="topbar-progress mt-2">
@@ -780,12 +774,17 @@
                                                             <span x-show="day.isToday" x-cloak class="calendar-timeline-now-marker" :style="getCalendarTimelineNowStyle(day)"></span>
 
                                                             <template x-for="entry in day.timelineEntries" :key="'timeline-entry-' + entry.id">
-                                                                <button
+                                                                <div
                                                                     @click="entry.type === 'monthly' ? openMonthlyTaskModal(entry.item) : openTaskModal(entry.item)"
+                                                                    @keydown.enter.prevent="entry.type === 'monthly' ? openMonthlyTaskModal(entry.item) : openTaskModal(entry.item)"
                                                                     :class="`calendar-timeline-task ${entry.type === 'monthly' ? 'calendar-timeline-monthly' : ('priority-' + entry.item.priority)} ${entry.type === 'monthly' && entry.done ? 'calendar-timeline-monthly-done' : getCalendarTaskStateClass(entry)} ${getCalendarTimelineTaskDensityClass(entry)}`"
                                                                     :style="getCalendarTimelineEntryStyle(entry, day)"
-                                                                    type="button"
+                                                                    role="button"
+                                                                    tabindex="0"
                                                                 >
+                                                                    <label x-show="entry.type === 'monthly'" @click.stop class="calendar-timeline-done-toggle" title="Oznacz jako zrobione">
+                                                                        <input type="checkbox" :checked="entry.done" @change.stop="toggleMonthlyTaskDone(entry.item)" />
+                                                                    </label>
                                                                     <div class="calendar-timeline-task-time" x-text="getCalendarTimelineTimeRangeLabel(entry)"></div>
                                                                     <div class="calendar-timeline-task-title">
                                                                         <span :class="entry.type === 'monthly' && entry.done ? 'line-through opacity-65' : ''" x-text="entry.item.name"></span>
@@ -793,13 +792,13 @@
                                                                     </div>
                                                                     <div class="calendar-timeline-task-meta">
                                                                         <span x-show="entry.type === 'task'" class="calendar-timeline-task-module" x-text="getModuleName(entry.item.module_id)"></span>
-                                                                        <span x-show="entry.type === 'monthly'" class="calendar-timeline-task-module">Miesieczne</span>
-                                                                        <span x-show="entry.type === 'task' && getCalendarCarryOverLabel(entry)" x-cloak class="calendar-timeline-task-carry" x-text="getCalendarCarryOverLabel(entry)"></span>
+                                                                        <span x-show="entry.type === 'monthly'" class="calendar-timeline-task-module">Cykliczne</span>
+                                                                        <span x-show="(entry.type === 'task' || entry.type === 'monthly') && getCalendarCarryOverLabel(entry)" x-cloak class="calendar-timeline-task-carry" x-text="getCalendarCarryOverLabel(entry)"></span>
                                                                         <span x-show="entry.type === 'task'" :class="getCalendarTaskUrgencyClass(entry)" class="calendar-entry-urgency" x-text="getCalendarTaskUrgencyLabel(entry)"></span>
                                                                         <span x-show="entry.type === 'task'" :class="getCalendarTaskStatusClass(entry)" class="calendar-entry-status" x-text="getCalendarTaskStatusLabel(entry)"></span>
-                                                                        <span x-show="entry.type === 'monthly'" :class="entry.done ? 'calendar-entry-status-todo' : 'calendar-entry-status-waiting'" class="calendar-entry-status" x-text="entry.done ? 'zrobione' : 'mies.'"></span>
+                                                                        <span x-show="entry.type === 'monthly'" :class="entry.done ? 'calendar-entry-status-todo' : 'calendar-entry-status-waiting'" class="calendar-entry-status" x-text="entry.done ? 'zrobione' : 'cykl.'"></span>
                                                                     </div>
-                                                                </button>
+                                                                </div>
                                                             </template>
                                                         </div>
                                                     </div>
@@ -826,10 +825,13 @@
                                                         </button>
 
                                                         <label x-show="entry.type === 'monthly'" class="calendar-agenda-row calendar-agenda-row-monthly">
-                                                            <span class="calendar-entry-time calendar-agenda-time">M</span>
+                                                            <input type="checkbox" :checked="entry.done" @change="toggleMonthlyTaskDone(entry.item)" class="mt-0.5 h-4 w-4 rounded border-cyan-300 text-cyan-600 focus:ring-cyan-500" />
                                                             <div class="min-w-0">
-                                                                <div class="calendar-agenda-title" x-text="entry.item.name"></div>
-                                                                <div class="mt-0.5 text-[11px] font-semibold text-cyan-700">Miesieczne</div>
+                                                                <div class="calendar-agenda-title" :class="entry.done ? 'line-through opacity-65' : ''" x-text="entry.item.name"></div>
+                                                                <div class="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] font-semibold text-cyan-700">
+                                                                    <span>Cykliczne</span>
+                                                                    <span x-show="getCalendarCarryOverLabel(entry)" x-cloak x-text="getCalendarCarryOverLabel(entry)"></span>
+                                                                </div>
                                                             </div>
                                                         </label>
 
@@ -903,17 +905,16 @@
                                                             <span :class="getCalendarTaskStatusClass(entry)" class="calendar-entry-status calendar-entry-status-compact" x-text="getCalendarTaskStatusLabel(entry)"></span>
                                                         </button>
 
-                                                        <button
+                                                        <div
                                                             x-show="entry.type === 'monthly'"
-                                                            @click.stop="openMonthlyTaskModal(entry.item)"
                                                             class="calendar-entry calendar-entry-monthly"
-                                                            type="button"
                                                         >
+                                                            <input type="checkbox" :checked="entry.done" @click.stop @change.stop="toggleMonthlyTaskDone(entry.item)" class="h-3.5 w-3.5 shrink-0 rounded border-cyan-300 text-cyan-600 focus:ring-cyan-500" />
                                                             <span class="calendar-entry-time" x-text="getCalendarEntryTime(entry)"></span>
                                                             <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-cyan-500"></span>
-                                                            <span class="calendar-entry-title" :class="entry.done ? 'line-through opacity-65' : ''" x-text="entry.item.name"></span>
-                                                            <span :class="entry.done ? 'calendar-entry-status-todo' : 'calendar-entry-status-waiting'" class="calendar-entry-status calendar-entry-status-compact" x-text="entry.done ? 'zrobione' : 'mies.'"></span>
-                                                        </button>
+                                                            <button @click.stop="openMonthlyTaskModal(entry.item)" type="button" class="calendar-entry-title text-left" :class="entry.done ? 'line-through opacity-65' : ''" x-text="entry.item.name"></button>
+                                                            <span :class="entry.done ? 'calendar-entry-status-todo' : 'calendar-entry-status-waiting'" class="calendar-entry-status calendar-entry-status-compact" x-text="entry.done ? 'zrobione' : 'cykl.'"></span>
+                                                        </div>
 
                                                         <label
                                                             x-show="entry.type === 'debt'"
@@ -1231,8 +1232,8 @@
                         <section class="card p-4 md:p-5">
                             <div class="flex flex-wrap items-center justify-between gap-3">
                                 <div>
-                                    <p class="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400">Zadania miesieczne</p>
-                                    <h2 class="mt-1 text-2xl font-black tracking-tight text-slate-900 md:text-3xl">Lista miesieczna</h2>
+                                    <p class="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400">Zadania cykliczne</p>
+                                    <h2 class="mt-1 text-2xl font-black tracking-tight text-slate-900 md:text-3xl">Lista cykliczna</h2>
                                 </div>
                                 <div class="flex flex-wrap items-center gap-2">
                                     <button @click="shiftMonthlyMonth(-1)" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-500 transition-colors hover:bg-slate-50">←</button>
@@ -1284,7 +1285,7 @@
 
                                 <template x-if="monthlyTasks.length === 0">
                                     <div class="rounded-[22px] border border-dashed border-slate-200 px-4 py-10 text-center text-sm text-slate-400">
-                                        Brak zadan miesiecznych. Dodaj pierwsze.
+                                        Brak zadan cyklicznych. Dodaj pierwsze.
                                     </div>
                                 </template>
                             </div>
@@ -1326,29 +1327,30 @@
 
                         <section class="card meds-form-card p-4 md:p-5">
                             <div class="meds-card-head mb-4">
-                                <p class="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400">Nowe przypomnienie</p>
-                                <h3 class="mt-1 text-xl font-black text-slate-900">Dodaj lek</h3>
+                                <p class="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400" x-text="editingMedicationId ? 'Edycja przypomnienia' : 'Nowe przypomnienie'"></p>
+                                <h3 class="mt-1 text-xl font-black text-slate-900" x-text="editingMedicationId ? 'Zmień lek i godzinę' : 'Dodaj lek'"></h3>
                             </div>
-                            <div class="meds-form-grid grid gap-3 md:grid-cols-[minmax(0,1.4fr)_160px_150px_auto]">
+                            <div class="meds-form-grid grid gap-3 md:grid-cols-[minmax(0,1.4fr)_160px_150px_auto_auto]">
                                 <input x-model="newMedication.name" class="rounded-2xl border border-slate-200 bg-white p-3 text-sm font-bold outline-none transition-colors focus:border-emerald-300" placeholder="Nazwa leku, np. Medikinet" />
                                 <select x-model="newMedication.schedule_type" class="rounded-2xl border border-slate-200 bg-white p-3 text-sm font-bold outline-none transition-colors focus:border-emerald-300">
                                     <option value="daily">Codziennie</option>
                                     <option value="weekdays">Pon-pt</option>
                                 </select>
                                 <input type="time" x-model="newMedication.reminder_time" class="rounded-2xl border border-slate-200 bg-white p-3 text-sm font-bold outline-none transition-colors focus:border-emerald-300" />
-                                <button @click="addMedication()" class="rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-bold text-white transition-colors hover:bg-emerald-700">Dodaj</button>
+                                <button @click="addMedication()" class="rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-bold text-white transition-colors hover:bg-emerald-700" x-text="editingMedicationId ? 'Zapisz' : 'Dodaj'"></button>
+                                <button x-show="editingMedicationId" x-cloak @click="resetMedicationDraft()" class="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-600 transition-colors hover:bg-slate-50">Anuluj</button>
                             </div>
                         </section>
 
                         <section class="card meds-list-card p-4 md:p-5">
                             <div class="meds-card-head mb-4 flex items-center justify-between gap-3">
                                 <h3 class="text-xl font-black text-slate-900">Lista lekow</h3>
-                                <span class="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-500" x-text="medicationsSummary.total + ' aktywne'"></span>
+                                <span class="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-500" x-text="medicationsSummary.active + ' aktywne · ' + medicationsSummary.paused + ' wstrzymane'"></span>
                             </div>
 
                             <div class="meds-list-grid grid gap-3 lg:grid-cols-2">
                                 <template x-for="med in medications" :key="med.id">
-                                    <article :class="med.scheduled_today ? 'border-slate-200 bg-slate-50/80' : 'border-slate-100 bg-white/60 opacity-75'" class="meds-list-item rounded-[22px] border p-4">
+                                    <article :class="med.active ? (med.scheduled_today ? 'border-slate-200 bg-slate-50/80' : 'border-slate-100 bg-white/60 opacity-75') : 'border-violet-100 bg-violet-50/50'" class="meds-list-item rounded-[22px] border p-4">
                                         <div class="flex flex-wrap items-start justify-between gap-3">
                                             <label class="flex min-w-0 items-start gap-3 text-sm font-bold text-slate-900">
                                                 <input type="checkbox" :disabled="!med.scheduled_today" :checked="med.done" @change="toggleMedicationDone(med, $event.target.checked)" class="mt-1 h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 disabled:cursor-not-allowed disabled:opacity-40" />
@@ -1361,7 +1363,11 @@
                                                     </span>
                                                 </span>
                                             </label>
-                                            <button @click="deleteMedication(med.id)" class="rounded-xl border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-bold text-rose-600 transition-colors hover:bg-rose-100">Usun</button>
+                                            <div class="flex shrink-0 flex-wrap gap-2">
+                                                <button @click="editMedication(med)" class="rounded-xl border border-cyan-200 bg-cyan-50 px-3 py-1.5 text-xs font-bold text-cyan-700 transition-colors hover:bg-cyan-100">Edytuj</button>
+                                                <button @click="toggleMedicationActive(med)" :class="med.active ? 'border-amber-200 bg-amber-50 text-amber-700' : 'border-emerald-200 bg-emerald-50 text-emerald-700'" class="rounded-xl border px-3 py-1.5 text-xs font-bold transition-colors" x-text="med.active ? 'Wstrzymaj' : 'Wznów'"></button>
+                                                <button @click="deleteMedication(med.id)" class="rounded-xl border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-bold text-rose-600 transition-colors hover:bg-rose-100">Usuń</button>
+                                            </div>
                                         </div>
                                     </article>
                                 </template>
@@ -1387,89 +1393,181 @@
                                 </div>
                                 <span class="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-500" x-text="getNotificationStatusLabel()"></span>
                             </div>
-                            <div class="mt-4 grid gap-2 sm:grid-cols-3">
-                                <div class="rounded-xl bg-slate-100 px-3 py-2.5">
-                                    <div class="text-lg font-black text-slate-800" x-text="getPushPermissionLabel()"></div>
-                                    <div class="text-[10px] font-black uppercase tracking-[0.14em] text-slate-500">Zgoda</div>
-                                </div>
-                                <div class="rounded-xl bg-emerald-50 px-3 py-2.5">
-                                    <div class="text-lg font-black text-emerald-700" x-text="pushState.subscriptionCount"></div>
-                                    <div class="text-[10px] font-black uppercase tracking-[0.14em] text-emerald-700/80">Urzadzenia</div>
-                                </div>
-                                <div class="rounded-xl bg-cyan-50 px-3 py-2.5">
-                                    <div class="text-lg font-black text-cyan-700" x-text="pushState.vapidConfigured ? 'VAPID OK' : 'brak VAPID'"></div>
-                                    <div class="text-[10px] font-black uppercase tracking-[0.14em] text-cyan-700/80">Backend</div>
-                                </div>
-                            </div>
                             <div class="mt-4 flex flex-wrap gap-2">
                                 <button @click="enablePushNotifications()" class="rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-bold text-white transition-colors hover:bg-emerald-700">Wlacz na tym urzadzeniu</button>
                                 <button @click="disablePushNotifications()" class="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-600 transition-colors hover:bg-slate-50">Wylacz tutaj</button>
                                 <button @click="sendTestNotification()" class="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-bold text-white transition-colors hover:bg-slate-800">Wyslij test</button>
                             </div>
                             <p x-show="pushState.message" x-cloak class="mt-3 text-sm font-bold text-slate-500" x-text="pushState.message"></p>
+                            <details class="notification-diagnostics mt-4 rounded-2xl border border-slate-200 bg-slate-50/80 p-3">
+                                <summary class="cursor-pointer text-xs font-black text-slate-600">Diagnostyka techniczna</summary>
+                                <div class="mt-3 grid gap-2 sm:grid-cols-3">
+                                    <div class="rounded-xl bg-white px-3 py-2.5">
+                                        <div class="text-sm font-black text-slate-800" x-text="getPushPermissionLabel()"></div>
+                                        <div class="text-[10px] font-black uppercase tracking-[0.14em] text-slate-500">Zgoda przeglądarki</div>
+                                    </div>
+                                    <div class="rounded-xl bg-white px-3 py-2.5">
+                                        <div class="text-sm font-black text-emerald-700" x-text="pushState.subscriptionCount"></div>
+                                        <div class="text-[10px] font-black uppercase tracking-[0.14em] text-slate-500">Aktywne urządzenia</div>
+                                    </div>
+                                    <div class="rounded-xl bg-white px-3 py-2.5">
+                                        <div class="text-sm font-black text-cyan-700" x-text="pushState.vapidConfigured ? 'skonfigurowany' : 'brak konfiguracji'"></div>
+                                        <div class="text-[10px] font-black uppercase tracking-[0.14em] text-slate-500">VAPID / backend</div>
+                                    </div>
+                                </div>
+                            </details>
                         </section>
 
-                        <section class="card p-4 md:p-5">
-                            <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+                        <section class="card notification-settings-card p-4 md:p-5">
+                            <div class="notification-settings-header mb-4 flex flex-wrap items-center justify-between gap-3">
                                 <div>
                                     <p class="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400">Harmonogram</p>
-                                    <h3 class="mt-1 text-xl font-black text-slate-900">Godziny i cykle</h3>
+                                    <h3 class="mt-1 text-xl font-black text-slate-900">Pełna kontrola</h3>
+                                    <p class="mt-1 text-xs leading-5 text-slate-500">Każdy rodzaj można wyłączyć osobno. Zmiany działają dopiero po zapisaniu.</p>
                                 </div>
-                                <button @click="saveNotificationSettings()" class="rounded-xl bg-emerald-600 px-4 py-2.5 text-xs font-bold text-white transition-colors hover:bg-emerald-700">Zapisz ustawienia</button>
+                                <div class="flex flex-wrap gap-2">
+                                    <button @click="resetNotificationSettingsDraft()" type="button" class="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-bold text-slate-600 transition-colors hover:bg-slate-50">Bezpieczne domyślne</button>
+                                    <button @click="saveNotificationSettings()" :disabled="notificationSettingsSaving" type="button" class="rounded-xl bg-emerald-600 px-4 py-2.5 text-xs font-bold text-white transition-colors hover:bg-emerald-700 disabled:cursor-wait disabled:opacity-60">
+                                        <span x-text="notificationSettingsSaving ? 'Zapisywanie...' : 'Zapisz ustawienia'"></span>
+                                    </button>
+                                </div>
                             </div>
 
-                            <div class="grid gap-3 lg:grid-cols-2">
-                                <label class="rounded-[20px] border border-slate-200 bg-slate-50 p-4">
-                                    <span class="flex items-start gap-3">
-                                        <input type="checkbox" x-model="notificationSettings.enabled" class="mt-1 h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500" />
+                            <div class="notification-settings-grid">
+                                <article class="notification-control notification-control-master">
+                                    <label class="notification-toggle-row">
+                                        <input type="checkbox" x-model="notificationSettings.enabled" class="notification-checkbox" />
                                         <span>
-                                            <span class="block text-sm font-black text-slate-900">Wszystkie powiadomienia</span>
-                                            <span class="mt-1 block text-xs leading-5 text-slate-500">Glowny wlacznik dla harmonogramu Web Push.</span>
+                                            <span class="notification-control-title">Wszystkie powiadomienia</span>
+                                            <span class="notification-control-copy">Główny wyłącznik całego harmonogramu Web Push.</span>
                                         </span>
-                                    </span>
-                                </label>
+                                    </label>
+                                </article>
 
-                                <label class="rounded-[20px] border border-slate-200 bg-slate-50 p-4">
-                                    <span class="flex items-start gap-3">
-                                        <input type="checkbox" x-model="notificationSettings.opening_enabled" class="mt-1 h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500" />
-                                        <span class="min-w-0 flex-1">
-                                            <span class="block text-sm font-black text-slate-900">Powiadomienie otwierajace</span>
-                                            <input type="time" x-model="notificationSettings.opening_time" class="mt-3 w-full rounded-2xl border border-slate-200 bg-white p-3 text-sm font-bold outline-none transition-colors focus:border-emerald-300" />
+                                <article class="notification-control">
+                                    <label class="notification-toggle-row">
+                                        <input type="checkbox" x-model="notificationSettings.quiet_hours_enabled" :disabled="!notificationSettings.enabled" class="notification-checkbox" />
+                                        <span>
+                                            <span class="notification-control-title">Cisza nocna</span>
+                                            <span class="notification-control-copy">W tym przedziale nic nie zostanie wysłane.</span>
                                         </span>
-                                    </span>
-                                </label>
+                                    </label>
+                                    <div class="notification-field-grid mt-3">
+                                        <label class="notification-field">Od
+                                            <input type="time" x-model="notificationSettings.quiet_hours_start" :disabled="!notificationSettings.enabled || !notificationSettings.quiet_hours_enabled" />
+                                        </label>
+                                        <label class="notification-field">Do
+                                            <input type="time" x-model="notificationSettings.quiet_hours_end" :disabled="!notificationSettings.enabled || !notificationSettings.quiet_hours_enabled" />
+                                        </label>
+                                    </div>
+                                </article>
 
-                                <label class="rounded-[20px] border border-slate-200 bg-slate-50 p-4">
-                                    <span class="flex items-start gap-3">
-                                        <input type="checkbox" x-model="notificationSettings.day_summary_enabled" class="mt-1 h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500" />
-                                        <span class="min-w-0 flex-1">
-                                            <span class="block text-sm font-black text-slate-900">Podsumowanie dnia</span>
-                                            <input type="time" x-model="notificationSettings.day_summary_time" class="mt-3 w-full rounded-2xl border border-slate-200 bg-white p-3 text-sm font-bold outline-none transition-colors focus:border-emerald-300" />
-                                        </span>
-                                    </span>
-                                </label>
+                                <article class="notification-control">
+                                    <p class="notification-group-label">Rytm dnia</p>
+                                    <div class="notification-schedule-row mt-2">
+                                        <label class="notification-toggle-row">
+                                            <input type="checkbox" x-model="notificationSettings.opening_enabled" :disabled="!notificationSettings.enabled" class="notification-checkbox" />
+                                            <span class="notification-control-title">Start dnia</span>
+                                        </label>
+                                        <input type="time" aria-label="Godzina rozpoczęcia dnia" x-model="notificationSettings.opening_time" :disabled="!notificationSettings.enabled || !notificationSettings.opening_enabled" class="notification-inline-input" />
+                                    </div>
+                                    <div class="notification-schedule-row mt-3">
+                                        <label class="notification-toggle-row">
+                                            <input type="checkbox" x-model="notificationSettings.day_summary_enabled" :disabled="!notificationSettings.enabled" class="notification-checkbox" />
+                                            <span class="notification-control-title">Jedno podsumowanie dnia</span>
+                                        </label>
+                                        <input type="time" aria-label="Godzina podsumowania dnia" x-model="notificationSettings.day_summary_time" :disabled="!notificationSettings.enabled || !notificationSettings.day_summary_enabled" class="notification-inline-input" />
+                                    </div>
+                                </article>
 
-                                <label class="rounded-[20px] border border-slate-200 bg-slate-50 p-4">
-                                    <span class="flex items-start gap-3">
-                                        <input type="checkbox" x-model="notificationSettings.medication_enabled" class="mt-1 h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500" />
-                                        <span class="min-w-0 flex-1">
-                                            <span class="block text-sm font-black text-slate-900">Leki</span>
-                                            <span class="mt-1 block text-xs font-bold text-slate-500">Ponawiaj co tyle minut po godzinie leku:</span>
-                                            <input type="number" min="1" max="1440" x-model.number="notificationSettings.medication_repeat_minutes" class="mt-3 w-full rounded-2xl border border-slate-200 bg-white p-3 text-sm font-bold outline-none transition-colors focus:border-emerald-300" />
+                                <article class="notification-control">
+                                    <p class="notification-group-label">Leki</p>
+                                    <label class="notification-toggle-row mt-2">
+                                        <input type="checkbox" x-model="notificationSettings.medication_enabled" :disabled="!notificationSettings.enabled" class="notification-checkbox" />
+                                        <span>
+                                            <span class="notification-control-title">Przypomnienia o lekach</span>
+                                            <span class="notification-control-copy">Leki z tą samą godziną przychodzą zawsze jako jedno zbiorcze powiadomienie.</span>
                                         </span>
-                                    </span>
-                                </label>
+                                    </label>
+                                    <label class="notification-toggle-row mt-3">
+                                        <input type="checkbox" x-model="notificationSettings.medication_repeat_enabled" :disabled="!notificationSettings.enabled || !notificationSettings.medication_enabled" class="notification-checkbox" />
+                                        <span class="notification-control-title">Ponawiaj, dopóki nie odhaczę</span>
+                                    </label>
+                                    <div class="notification-field-grid mt-3">
+                                        <label class="notification-field">Co ile minut
+                                            <input type="number" min="1" max="1440" inputmode="numeric" x-model.number="notificationSettings.medication_repeat_minutes" :disabled="!notificationSettings.enabled || !notificationSettings.medication_enabled || !notificationSettings.medication_repeat_enabled" />
+                                        </label>
+                                        <label class="notification-field">Przez ile minut
+                                            <input type="number" min="1" max="1440" inputmode="numeric" x-model.number="notificationSettings.medication_repeat_window_minutes" :disabled="!notificationSettings.enabled || !notificationSettings.medication_enabled || !notificationSettings.medication_repeat_enabled" />
+                                        </label>
+                                    </div>
+                                </article>
 
-                                <label class="rounded-[20px] border border-slate-200 bg-slate-50 p-4 lg:col-span-2">
-                                    <span class="flex items-start gap-3">
-                                        <input type="checkbox" x-model="notificationSettings.task_reminder_enabled" class="mt-1 h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500" />
-                                        <span class="min-w-0 flex-1">
-                                            <span class="block text-sm font-black text-slate-900">Ogolne przypomnienia fokusowe</span>
-                                            <span class="mt-1 block text-xs font-bold text-slate-500">Dla otwartych rzeczy po terminie albo po zaplanowanej godzinie. Minimum 15 minut.</span>
-                                            <input type="number" min="15" max="1440" x-model.number="notificationSettings.task_reminder_repeat_minutes" class="mt-3 w-full rounded-2xl border border-slate-200 bg-white p-3 text-sm font-bold outline-none transition-colors focus:border-emerald-300" />
-                                        </span>
-                                    </span>
-                                </label>
+                                <article class="notification-control notification-control-wide">
+                                    <p class="notification-group-label">Zadania</p>
+                                    <div class="grid gap-3 md:grid-cols-2">
+                                        <label class="notification-toggle-row mt-2">
+                                            <input type="checkbox" x-model="notificationSettings.task_due_enabled" :disabled="!notificationSettings.enabled" class="notification-checkbox" />
+                                            <span>
+                                                <span class="notification-control-title">Alarm o zaplanowanej godzinie</span>
+                                                <span class="notification-control-copy">Uwzględnia opcję „Powiadom” ustawioną w konkretnym zadaniu. Kilka zadań na raz zostanie zgrupowanych.</span>
+                                            </span>
+                                        </label>
+                                        <div>
+                                            <label class="notification-toggle-row mt-2">
+                                                <input type="checkbox" x-model="notificationSettings.task_reminder_enabled" :disabled="!notificationSettings.enabled" class="notification-checkbox" />
+                                                <span>
+                                                    <span class="notification-control-title">Zbiorcze przypomnienia po terminie</span>
+                                                    <span class="notification-control-copy">To były wiadomości wracające co 2 godziny. Teraz możesz je wyłączyć lub ograniczyć.</span>
+                                                </span>
+                                            </label>
+                                            <div class="notification-field-grid mt-3">
+                                                <label class="notification-field">Co ile minut
+                                                    <input type="number" min="15" max="1440" inputmode="numeric" x-model.number="notificationSettings.task_reminder_repeat_minutes" :disabled="!notificationSettings.enabled || !notificationSettings.task_reminder_enabled" />
+                                                </label>
+                                                <label class="notification-field">Maks. przez minut
+                                                    <input type="number" min="15" max="10080" inputmode="numeric" x-model.number="notificationSettings.task_reminder_window_minutes" :disabled="!notificationSettings.enabled || !notificationSettings.task_reminder_enabled" />
+                                                </label>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </article>
+
+                                <article class="notification-control notification-control-wide">
+                                    <div class="flex flex-wrap items-end gap-3">
+                                        <label class="notification-field min-w-[220px] flex-1">Strefa czasowa
+                                            <input type="text" x-model.trim="notificationSettings.timezone" :disabled="!notificationSettings.enabled" placeholder="Europe/Warsaw" autocomplete="off" />
+                                        </label>
+                                        <button @click="useBrowserNotificationTimezone()" type="button" class="rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-bold text-slate-600 transition-colors hover:bg-slate-50">Użyj strefy urządzenia</button>
+                                    </div>
+                                </article>
+                            </div>
+                        </section>
+
+                        <section class="card notification-history-card p-4 md:p-5">
+                            <div class="flex flex-wrap items-start justify-between gap-3">
+                                <div>
+                                    <p class="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400">Ostatnie wysyłki</p>
+                                    <h3 class="mt-1 text-xl font-black text-slate-900">Dlaczego dostałem to powiadomienie?</h3>
+                                </div>
+                                <button @click="loadNotificationHistory()" :disabled="notificationHistoryLoading" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600 transition-colors hover:bg-slate-50 disabled:opacity-50" x-text="notificationHistoryLoading ? 'Odświeżanie…' : 'Odśwież'"></button>
+                            </div>
+                            <div class="notification-history-list mt-4 space-y-2">
+                                <template x-for="item in notificationHistory" :key="item.id">
+                                    <article class="notification-history-item rounded-2xl border border-slate-200 bg-slate-50/80 p-3">
+                                        <div class="flex flex-wrap items-center justify-between gap-2">
+                                            <span class="rounded-full bg-white px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] text-slate-600" x-text="getNotificationHistoryKindLabel(item.kind)"></span>
+                                            <span class="text-[11px] font-bold text-slate-400" x-text="formatNotificationHistoryDate(item.created_at)"></span>
+                                        </div>
+                                        <p class="mt-2 text-sm font-black text-slate-800" x-text="item.title"></p>
+                                        <p class="mt-1 text-xs leading-5 text-slate-500" x-text="item.body"></p>
+                                        <div class="mt-2 rounded-xl bg-white px-3 py-2 text-xs leading-5 text-slate-600">
+                                            <span class="font-black">Dlaczego: </span><span x-text="item.reason"></span>
+                                        </div>
+                                        <p class="mt-2 text-[11px] font-bold" :class="item.status === 'sent' ? 'text-emerald-600' : 'text-rose-600'" x-text="item.status === 'sent' ? ('Dostarczono na ' + item.sent_count + ' urządzeń') : ('Nie dostarczono · błędy: ' + item.failed_count)"></p>
+                                    </article>
+                                </template>
+                                <div x-show="!notificationHistoryLoading && notificationHistory.length === 0" x-cloak class="rounded-2xl border border-dashed border-slate-200 px-4 py-8 text-center text-sm text-slate-400">Historia jest pusta. Kolejne wysyłki pojawią się tutaj.</div>
                             </div>
                         </section>
                     </div>
@@ -1586,20 +1684,20 @@
             </main>
         </div>
 
-        <nav class="bottom-nav">
-            <button @click="navigateMainView('dash')" :class="view === 'dash' ? 'is-active' : ''" class="bottom-nav-btn" type="button">
+        <nav class="bottom-nav" aria-label="Główna nawigacja">
+            <button @click="navigateMainView('dash')" :class="view === 'dash' ? 'is-active' : ''" :aria-current="view === 'dash' ? 'page' : null" class="bottom-nav-btn" type="button">
                 <span class="bottom-nav-icon">⌂</span>
                 <span>Pulpit</span>
             </button>
-            <button @click="navigateMainView('kanban')" :class="view === 'kanban' ? 'is-active' : ''" class="bottom-nav-btn" type="button">
+            <button @click="navigateMainView('kanban')" :class="view === 'kanban' ? 'is-active' : ''" :aria-current="view === 'kanban' ? 'page' : null" class="bottom-nav-btn" type="button">
                 <span class="bottom-nav-icon">□</span>
                 <span>Zadania</span>
             </button>
-            <button @click="navigateMainView('global')" :class="view === 'global' ? 'is-active' : ''" class="bottom-nav-btn" type="button">
+            <button @click="navigateMainView('global')" :class="view === 'global' ? 'is-active' : ''" :aria-current="view === 'global' ? 'page' : null" class="bottom-nav-btn" type="button">
                 <span class="bottom-nav-icon">▣</span>
                 <span>Moduly</span>
             </button>
-            <button @click="navigateMainView('calendar')" :class="view === 'calendar' ? 'is-active' : ''" class="bottom-nav-btn" type="button">
+            <button @click="navigateMainView('calendar')" :class="view === 'calendar' ? 'is-active' : ''" :aria-current="view === 'calendar' ? 'page' : null" class="bottom-nav-btn" type="button">
                 <span class="bottom-nav-icon">◷</span>
                 <span>Kalendarz</span>
             </button>
@@ -1626,13 +1724,15 @@
 
                 <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-7">
                     <div>
-                        <label class="text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">Modul</label>
-                        <select x-model="editingTask.module_id" class="mt-1 w-full rounded-2xl border border-slate-200 bg-white p-3 text-sm font-bold outline-none transition-colors focus:border-emerald-300">
-                            <option value="">Bez modulu</option>
-                            <template x-for="module in modules" :key="module.id">
+                        <label class="text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">Moduł <span class="text-rose-500">*</span></label>
+                        <select x-ref="taskModuleInput" x-model="editingTask.module_id" required :disabled="editingTask.shared_role === 'shared'" :class="taskFormError && !editingTask.module_id ? 'border-rose-400 ring-2 ring-rose-100' : ''" class="mt-1 w-full rounded-2xl border border-slate-200 bg-white p-3 text-sm font-bold outline-none transition-colors focus:border-emerald-300 disabled:cursor-not-allowed disabled:opacity-60">
+                            <option value="" disabled>Wybierz moduł</option>
+                            <template x-for="module in getTaskModuleOptions(editingTask)" :key="module.id">
                                 <option :value="String(module.id)" x-text="module.name"></option>
                             </template>
                         </select>
+                        <p x-show="taskFormError && !editingTask.module_id" x-cloak class="mt-1 text-[11px] font-bold leading-4 text-rose-600" x-text="taskFormError"></p>
+                        <button x-show="editingTask.shared_role !== 'shared'" x-cloak @click="addModuleForTask()" type="button" class="mt-1 text-[11px] font-bold text-emerald-700 hover:text-emerald-800">+ Utwórz moduł bez zamykania</button>
                     </div>
                     <div>
                         <label class="text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">Priorytet</label>
@@ -1661,7 +1761,7 @@
                     </div>
                     <div>
                         <label class="text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">Powiadom</label>
-                        <select x-model.number="editingTask.reminder_offset_minutes" class="mt-1 w-full rounded-2xl border border-slate-200 bg-white p-3 text-sm font-bold outline-none transition-colors focus:border-emerald-300">
+                        <select x-model.number="editingTask.reminder_offset_minutes" :disabled="!editingTask.due_date" class="mt-1 w-full rounded-2xl border border-slate-200 bg-white p-3 text-sm font-bold outline-none transition-colors focus:border-emerald-300 disabled:cursor-not-allowed disabled:opacity-50">
                             <template x-for="option in taskReminderOptions" :key="option.value">
                                 <option :value="option.value" x-text="option.label"></option>
                             </template>
@@ -1758,9 +1858,9 @@
             </div>
         </div>
 
-        <div x-show="monthlyTaskModal" x-cloak class="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-slate-900/40 p-3 backdrop-blur-sm md:items-center md:p-4">
-            <div class="card relative w-full max-w-lg p-5 md:p-6" @click.away="closeMonthlyTaskModal()">
-                <p class="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400" x-text="editingMonthlyTaskId ? 'Edycja zadania miesiecznego' : 'Nowe zadanie miesieczne'"></p>
+        <div x-show="monthlyTaskModal" x-cloak class="monthly-task-modal-backdrop fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-slate-900/40 p-3 backdrop-blur-sm md:items-center md:p-4">
+            <div class="monthly-task-modal-surface card relative w-full max-w-lg p-5 md:p-6" @click.away="closeMonthlyTaskModal()">
+                <p class="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400" x-text="editingMonthlyTaskId ? 'Edycja zadania cyklicznego' : 'Nowe zadanie cykliczne'"></p>
                 <h3 class="mt-1 text-2xl font-black text-slate-900" x-text="editingMonthlyTaskId ? 'Zmien nazwe, dzien i godzine' : 'Opis i cykl powtarzania'"></h3>
                 <div class="mt-4 space-y-3">
                     <input x-model="newMonthlyTaskName" @keydown.enter.prevent="addMonthlyTask()" maxlength="120" class="w-full rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm font-bold outline-none transition-colors focus:border-emerald-300 focus:bg-white" placeholder="Np. oplacic ZUS, podsumowac wydatki..." />
@@ -1826,6 +1926,19 @@
                     <button @click="addDebt()" class="rounded-2xl bg-emerald-600 px-5 py-3 text-xs font-bold text-white shadow-[0_12px_24px_rgba(5,150,105,0.22)]">Dodaj pozycje</button>
                 </div>
             </div>
+        </div>
+
+        <div class="toast-stack" aria-live="polite" aria-atomic="false">
+            <template x-for="toast in toasts" :key="toast.id">
+                <article :class="`calm-toast calm-toast-${toast.type}`" role="status">
+                    <p class="calm-toast-message" x-text="toast.message"></p>
+                    <div x-show="toast.actionLabel || toast.cancelLabel || toast.closable" class="calm-toast-actions">
+                        <button x-show="toast.cancelLabel" @click="dismissToast(toast.id)" type="button" class="calm-toast-secondary" x-text="toast.cancelLabel"></button>
+                        <button x-show="toast.actionLabel" @click="runToastAction(toast.id)" type="button" class="calm-toast-primary" x-text="toast.actionLabel"></button>
+                        <button x-show="toast.closable && !toast.cancelLabel && !toast.actionLabel" @click="dismissToast(toast.id)" type="button" class="calm-toast-close" aria-label="Zamknij">×</button>
+                    </div>
+                </article>
+            </template>
         </div>
     </div>
 </body>

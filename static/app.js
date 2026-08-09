@@ -7,18 +7,32 @@
                 calmMode: false,
                 theme: 'light',
                 settingsMenuOpen: false,
+                toasts: [],
+                toastTimers: {},
+                toastSequence: 0,
+                undoTimers: {},
+                notificationHistory: [],
+                notificationHistoryLoading: false,
                 notificationSettings: {
                     enabled: true,
+                    quiet_hours_enabled: true,
+                    quiet_hours_start: '22:00',
+                    quiet_hours_end: '07:00',
                     opening_enabled: true,
                     opening_time: '08:00',
                     day_summary_enabled: true,
                     day_summary_time: '20:30',
                     medication_enabled: true,
+                    medication_repeat_enabled: false,
                     medication_repeat_minutes: 5,
+                    medication_repeat_window_minutes: 120,
+                    task_due_enabled: true,
                     task_reminder_enabled: true,
                     task_reminder_repeat_minutes: 120,
+                    task_reminder_window_minutes: 480,
                     timezone: 'Europe/Warsaw'
                 },
+                notificationSettingsSaving: false,
                 pushState: {
                     supported: false,
                     serviceWorkerReady: false,
@@ -30,6 +44,8 @@
                     message: ''
                 },
                 zoomGuardsInstalled: false,
+                viewportGuardsInstalled: false,
+                keyboardOpen: false,
                 fabOpen: false,
                 sidebarCollapsed: false,
                 focusFilter: 'all',
@@ -41,6 +57,7 @@
                 taskModal: false,
                 isCreatingTask: false,
                 editingTask: {},
+                taskFormError: '',
                 priorityFilter: 'ALL',
                 sortOrder: 'none',
                 API: '',
@@ -66,7 +83,8 @@
                 monthlyTasks: [],
                 medicationsDate: '',
                 medications: [],
-                medicationsSummary: { total: 0, scheduled: 0, done: 0, open: 0 },
+                medicationsSummary: { total: 0, active: 0, paused: 0, scheduled: 0, done: 0, open: 0 },
+                editingMedicationId: null,
                 newMedication: {
                     name: '',
                     schedule_type: 'daily',
@@ -149,6 +167,7 @@
                     { id: 'gotowe', name: 'Gotowe', color: 'text-emerald-600' }
                 ],
                 taskReminderOptions: [
+                    { value: -1, label: 'Nie powiadamiaj' },
                     { value: 0, label: 'O czasie' },
                     { value: 5, label: '5 min przed' },
                     { value: 10, label: '10 min przed' },
@@ -213,6 +232,32 @@
                     if (!isMobile) {
                         this.mobileModulesOpen = true;
                     }
+                    this.updateKeyboardState();
+                },
+
+                updateKeyboardState() {
+                    if (typeof window === 'undefined' || typeof document === 'undefined') return;
+                    if (!window.matchMedia('(max-width: 767px)').matches) {
+                        this.keyboardOpen = false;
+                        return;
+                    }
+                    const active = document.activeElement;
+                    const formFieldFocused = !!active && (
+                        active.matches?.('input, textarea, select, [contenteditable="true"]')
+                    );
+                    const viewport = window.visualViewport;
+                    const viewportReduced = !!viewport && (window.innerHeight - viewport.height) > 120;
+                    this.keyboardOpen = formFieldFocused || viewportReduced;
+                },
+
+                installViewportGuards() {
+                    if (this.viewportGuardsInstalled || typeof window === 'undefined' || typeof document === 'undefined') return;
+                    this.viewportGuardsInstalled = true;
+                    const update = () => window.requestAnimationFrame(() => this.updateKeyboardState());
+                    document.addEventListener('focusin', update);
+                    document.addEventListener('focusout', () => window.setTimeout(update, 120));
+                    window.visualViewport?.addEventListener('resize', update);
+                    window.visualViewport?.addEventListener('scroll', update);
                 },
 
                 installZoomGuards() {
@@ -231,6 +276,88 @@
                         }
                         lastTouchEnd = now;
                     }, { passive: false });
+                },
+
+                showToast(message, type = 'info', options = {}) {
+                    const id = ++this.toastSequence;
+                    const toast = {
+                        id,
+                        message: String(message || ''),
+                        type,
+                        actionLabel: options.actionLabel || '',
+                        cancelLabel: options.cancelLabel || '',
+                        onAction: typeof options.onAction === 'function' ? options.onAction : null,
+                        onDismiss: typeof options.onDismiss === 'function' ? options.onDismiss : null,
+                        closable: options.closable !== false
+                    };
+                    this.toasts.push(toast);
+                    const duration = Number(options.duration ?? (toast.actionLabel ? 0 : 4500));
+                    if (duration > 0) {
+                        this.toastTimers[id] = window.setTimeout(() => this.dismissToast(id), duration);
+                    }
+                    return id;
+                },
+
+                removeToast(id) {
+                    window.clearTimeout(this.toastTimers[id]);
+                    delete this.toastTimers[id];
+                    this.toasts = this.toasts.filter(item => item.id !== id);
+                },
+
+                dismissToast(id) {
+                    const toast = this.toasts.find(item => item.id === id);
+                    this.removeToast(id);
+                    if (toast?.onDismiss) toast.onDismiss();
+                },
+
+                runToastAction(id) {
+                    const toast = this.toasts.find(item => item.id === id);
+                    if (!toast) return;
+                    this.removeToast(id);
+                    if (toast.onAction) toast.onAction();
+                },
+
+                askConfirmation(message, confirmLabel = 'Kontynuuj') {
+                    return new Promise(resolve => {
+                        let settled = false;
+                        const finish = value => {
+                            if (settled) return;
+                            settled = true;
+                            resolve(value);
+                        };
+                        this.showToast(message, 'warning', {
+                            duration: 0,
+                            actionLabel: confirmLabel,
+                            cancelLabel: 'Anuluj',
+                            onAction: () => finish(true),
+                            onDismiss: () => finish(false)
+                        });
+                    });
+                },
+
+                queueUndoableAction(message, action) {
+                    let toastId = 0;
+                    const cancel = () => {
+                        window.clearTimeout(this.undoTimers[toastId]);
+                        delete this.undoTimers[toastId];
+                        this.showToast('Anulowano. Nic nie zostało usunięte.', 'success');
+                    };
+                    toastId = this.showToast(message, 'warning', {
+                        duration: 0,
+                        actionLabel: 'Cofnij',
+                        onAction: cancel,
+                        closable: false
+                    });
+                    this.undoTimers[toastId] = window.setTimeout(async () => {
+                        delete this.undoTimers[toastId];
+                        this.removeToast(toastId);
+                        try {
+                            await action();
+                        } catch (error) {
+                            this.showToast(error?.message || 'Nie udało się wykonać operacji.', 'error');
+                        }
+                    }, 6500);
+                    return true;
                 },
 
                 applyRouteFromUrl() {
@@ -275,6 +402,7 @@
                 async init() {
                     this.loadUIPreferences();
                     this.installZoomGuards();
+                    this.installViewportGuards();
                     this.handleViewportResize();
                     this.registerServiceWorker();
                     if (!this.isMobileLayout) {
@@ -297,6 +425,7 @@
                         this.loadMedications(),
                         this.loadBrainDump(),
                         this.loadNotificationSettings(),
+                        this.loadNotificationHistory(),
                         this.loadCanvasBoard(),
                         this.loadProjectDoc(),
                         this.loadMonthlyTasks(),
@@ -488,6 +617,18 @@
                     return this.sortModulesForAttention(this.modules);
                 },
 
+                getAssignableModules() {
+                    return this.getSidebarModules().filter(module => !module.is_shared);
+                },
+
+                getTaskModuleOptions(task = null) {
+                    if (task?.shared_role === 'shared') {
+                        const currentModuleId = this.normalizeOptionalId(task.module_id);
+                        return this.modules.filter(module => Number(module.id) === Number(currentModuleId));
+                    }
+                    return this.getAssignableModules();
+                },
+
                 getModulesByCategory(category) {
                     const normalized = this.normalizeModuleCategory(category);
                     return this.sortModulesForAttention(
@@ -549,7 +690,8 @@
 
                 normalizeReminderOffsetMinutes(value) {
                     const parsed = Math.round(Number(value));
-                    if (!Number.isFinite(parsed) || parsed < 0) return 0;
+                    if (!Number.isFinite(parsed)) return 0;
+                    if (parsed < 0) return -1;
                     return Math.min(1440, parsed);
                 },
 
@@ -680,7 +822,7 @@
                     if (nextName === null) return;
                     const cleanName = nextName.trim();
                     if (!cleanName) {
-                        alert('Nazwa modulu nie moze byc pusta.');
+                        this.showToast('Nazwa modulu nie moze byc pusta.');
                         return;
                     }
 
@@ -691,7 +833,7 @@
                     });
 
                     if (!response.ok) {
-                        alert(await this.getApiErrorMessage(response, 'Nie udalo sie zmienic nazwy modulu.'));
+                        this.showToast(await this.getApiErrorMessage(response, 'Nie udalo sie zmienic nazwy modulu.'));
                         return;
                     }
 
@@ -865,7 +1007,10 @@
                             repeat_type: this.normalizeMonthlyRepeatType(task.repeat_type),
                             repeat_weekday: this.normalizeMonthlyRepeatWeekday(task.repeat_weekday),
                             date_key: this.sanitizeDateKey(task.date_key),
+                            display_date_key: this.sanitizeDateKey(task.display_date_key || task.date_key),
                             state_key: (task.state_key || payload.month_key || month).toString(),
+                            legacy_state_key: (task.legacy_state_key || '').toString(),
+                            overdue: !!task.overdue,
                             done: !!task.done
                         }))
                         : [];
@@ -877,7 +1022,7 @@
                     const res = await fetch(`${this.API}/medications?date=${encodeURIComponent(cleanDate)}`);
                     if (!res.ok) {
                         this.medications = [];
-                        this.medicationsSummary = { total: 0, scheduled: 0, done: 0, open: 0 };
+                        this.medicationsSummary = { total: 0, active: 0, paused: 0, scheduled: 0, done: 0, open: 0 };
                         return;
                     }
                     const payload = await res.json();
@@ -888,12 +1033,15 @@
                             id: Number(item.id) || 0,
                             schedule_type: this.normalizeMedicationScheduleType(item.schedule_type),
                             reminder_time: this.sanitizeDueTime(item.reminder_time, '08:00') || '08:00',
+                            active: !!item.active,
                             scheduled_today: !!item.scheduled_today,
                             done: !!item.done
                         }))
                         : [];
                     this.medicationsSummary = {
                         total: Number(payload.summary?.total || 0),
+                        active: Number(payload.summary?.active || 0),
+                        paused: Number(payload.summary?.paused || 0),
                         scheduled: Number(payload.summary?.scheduled || 0),
                         done: Number(payload.summary?.done || 0),
                         open: Number(payload.summary?.open || 0)
@@ -918,16 +1066,36 @@
                 getDefaultNotificationSettings() {
                     return {
                         enabled: true,
+                        quiet_hours_enabled: true,
+                        quiet_hours_start: '22:00',
+                        quiet_hours_end: '07:00',
                         opening_enabled: true,
                         opening_time: '08:00',
                         day_summary_enabled: true,
                         day_summary_time: '20:30',
                         medication_enabled: true,
+                        medication_repeat_enabled: false,
                         medication_repeat_minutes: 5,
+                        medication_repeat_window_minutes: 120,
+                        task_due_enabled: true,
                         task_reminder_enabled: true,
                         task_reminder_repeat_minutes: 120,
+                        task_reminder_window_minutes: 480,
                         timezone: 'Europe/Warsaw'
                     };
+                },
+
+                resetNotificationSettingsDraft() {
+                    this.notificationSettings = this.getDefaultNotificationSettings();
+                    this.pushState.message = 'Przywrocono bezpieczne wartosci. Kliknij Zapisz, aby je zastosowac.';
+                },
+
+                useBrowserNotificationTimezone() {
+                    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+                    if (timezone) {
+                        this.notificationSettings.timezone = timezone;
+                        this.pushState.message = `Wykryta strefa: ${timezone}. Kliknij Zapisz.`;
+                    }
                 },
 
                 async loadNotificationSettings() {
@@ -946,6 +1114,43 @@
                         this.notificationSettings = this.getDefaultNotificationSettings();
                     }
                     await this.refreshPushState();
+                },
+
+                async loadNotificationHistory() {
+                    this.notificationHistoryLoading = true;
+                    try {
+                        const response = await fetch(`${this.API}/notifications/history?limit=30`);
+                        if (!response.ok) throw new Error('notification_history_failed');
+                        const payload = await response.json();
+                        this.notificationHistory = Array.isArray(payload.items) ? payload.items : [];
+                    } catch (error) {
+                        this.notificationHistory = [];
+                    } finally {
+                        this.notificationHistoryLoading = false;
+                    }
+                },
+
+                getNotificationHistoryKindLabel(kind) {
+                    return ({
+                        opening: 'Start dnia',
+                        day_summary: 'Podsumowanie',
+                        medication: 'Leki',
+                        medication_repeat: 'Leki · ponowienie',
+                        task_due: 'Termin zadania',
+                        task_overdue: 'Zadania po terminie',
+                        test: 'Test'
+                    })[kind] || 'Powiadomienie';
+                },
+
+                formatNotificationHistoryDate(value) {
+                    const parsed = new Date(value || '');
+                    if (Number.isNaN(parsed.getTime())) return value || '';
+                    return new Intl.DateTimeFormat('pl-PL', {
+                        day: '2-digit',
+                        month: '2-digit',
+                        hour: '2-digit',
+                        minute: '2-digit'
+                    }).format(parsed);
                 },
 
                 isIOSDevice() {
@@ -986,6 +1191,17 @@
                         const readyRegistration = registration || await navigator.serviceWorker.ready;
                         const subscription = await readyRegistration.pushManager.getSubscription();
                         this.pushState.subscribed = !!subscription;
+                        if (this.pushState.permission === 'granted') {
+                            if (!subscription && this.pushState.vapidConfigured && this.notificationSettings.enabled) {
+                                const recreated = await this.recreatePushSubscription(readyRegistration, { quiet: true });
+                                this.pushState.subscribed = !!recreated;
+                            } else if (subscription && this.pushState.vapidConfigured && Number(this.pushState.subscriptionCount || 0) <= 0) {
+                                const recreated = await this.recreatePushSubscription(readyRegistration, { quiet: true });
+                                this.pushState.subscribed = !!recreated;
+                            } else if (subscription && (this.pushState.vapidConfigured || Number(this.pushState.subscriptionCount || 0) > 0)) {
+                                await this.savePushSubscription(subscription, { quiet: true });
+                            }
+                        }
                     } catch (error) {
                         this.pushState.subscribed = false;
                     }
@@ -1012,9 +1228,51 @@
                     return outputArray;
                 },
 
+                async savePushSubscription(subscription, options = {}) {
+                    if (!subscription) return false;
+                    const response = await fetch(`${this.API}/notifications/subscribe`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            subscription: subscription.toJSON(),
+                            user_agent: navigator.userAgent || ''
+                        })
+                    });
+                    if (!response.ok) {
+                        if (!options.quiet) {
+                            this.showToast(await this.getApiErrorMessage(response, 'Nie udalo sie zapisac subskrypcji powiadomien.'));
+                        }
+                        return false;
+                    }
+
+                    const payload = await response.json();
+                    this.pushState.subscribed = true;
+                    this.pushState.subscriptionCount = Number(payload.subscription_count || 1);
+                    return true;
+                },
+
+                async recreatePushSubscription(registration, options = {}) {
+                    const publicKey = await this.loadVapidPublicKey();
+                    if (!publicKey) return null;
+
+                    const existing = await registration.pushManager.getSubscription();
+                    if (existing) {
+                        try {
+                            await existing.unsubscribe();
+                        } catch (error) {}
+                    }
+
+                    const subscription = await registration.pushManager.subscribe({
+                        userVisibleOnly: true,
+                        applicationServerKey: this.urlBase64ToUint8Array(publicKey)
+                    });
+                    const saved = await this.savePushSubscription(subscription, options);
+                    return saved ? subscription : null;
+                },
+
                 async enablePushNotifications() {
                     if (!this.pushState.supported) {
-                        alert(this.isIOSDevice() && !this.isStandalonePWA()
+                        this.showToast(this.isIOSDevice() && !this.isStandalonePWA()
                             ? 'Na iPhonie dodaj aplikacje do ekranu glownego i otworz ja z ikony.'
                             : 'Ta przegladarka nie wspiera Web Push.');
                         return;
@@ -1022,7 +1280,7 @@
 
                     const publicKey = await this.loadVapidPublicKey();
                     if (!publicKey) {
-                        alert('Brakuje VAPID_PUBLIC_KEY na backendzie. Wygeneruj klucze i dodaj je do .env.');
+                        this.showToast('Brakuje VAPID_PUBLIC_KEY na backendzie. Wygeneruj klucze i dodaj je do .env.');
                         return;
                     }
 
@@ -1043,22 +1301,11 @@
                         });
                     }
 
-                    const response = await fetch(`${this.API}/notifications/subscribe`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            subscription: subscription.toJSON(),
-                            user_agent: navigator.userAgent || ''
-                        })
-                    });
-                    if (!response.ok) {
-                        alert(await this.getApiErrorMessage(response, 'Nie udalo sie zapisac subskrypcji powiadomien.'));
+                    const saved = await this.savePushSubscription(subscription);
+                    if (!saved) {
                         return;
                     }
 
-                    const payload = await response.json();
-                    this.pushState.subscribed = true;
-                    this.pushState.subscriptionCount = Number(payload.subscription_count || 1);
                     this.pushState.message = 'Powiadomienia sa wlaczone na tym urzadzeniu.';
                 },
 
@@ -1083,37 +1330,50 @@
                 },
 
                 async saveNotificationSettings() {
-                    const settings = {
-                        ...this.notificationSettings,
-                        medication_repeat_minutes: Math.max(1, Number(this.notificationSettings.medication_repeat_minutes || 5)),
-                        task_reminder_repeat_minutes: Math.max(15, Number(this.notificationSettings.task_reminder_repeat_minutes || 120))
-                    };
-                    const response = await fetch(`${this.API}/notifications/settings`, {
-                        method: 'PUT',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(settings)
-                    });
-                    if (!response.ok) {
-                        alert(await this.getApiErrorMessage(response, 'Nie udalo sie zapisac ustawien powiadomien.'));
-                        return;
+                    if (this.notificationSettingsSaving) return;
+                    this.notificationSettingsSaving = true;
+                    try {
+                        const settings = {
+                            ...this.notificationSettings,
+                            medication_repeat_minutes: Math.max(1, Number(this.notificationSettings.medication_repeat_minutes || 5)),
+                            medication_repeat_window_minutes: Math.max(1, Number(this.notificationSettings.medication_repeat_window_minutes || 120)),
+                            task_reminder_repeat_minutes: Math.max(15, Number(this.notificationSettings.task_reminder_repeat_minutes || 120)),
+                            task_reminder_window_minutes: Math.max(15, Number(this.notificationSettings.task_reminder_window_minutes || 480)),
+                            timezone: (this.notificationSettings.timezone || 'Europe/Warsaw').trim() || 'Europe/Warsaw'
+                        };
+                        const response = await fetch(`${this.API}/notifications/settings`, {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(settings)
+                        });
+                        if (!response.ok) {
+                            this.showToast(await this.getApiErrorMessage(response, 'Nie udalo sie zapisac ustawien powiadomien.'));
+                            return;
+                        }
+                        const payload = await response.json();
+                        this.notificationSettings = {
+                            ...this.getDefaultNotificationSettings(),
+                            ...(payload.settings || {})
+                        };
+                        this.pushState.subscriptionCount = Number(payload.subscription_count || this.pushState.subscriptionCount || 0);
+                        this.pushState.vapidConfigured = !!payload.vapid_configured;
+                        this.pushState.message = 'Ustawienia powiadomien zapisane.';
+                    } catch (error) {
+                        this.showToast('Nie udalo sie zapisac ustawien. Sprawdz polaczenie i sprobuj ponownie.');
+                    } finally {
+                        this.notificationSettingsSaving = false;
                     }
-                    const payload = await response.json();
-                    this.notificationSettings = {
-                        ...this.getDefaultNotificationSettings(),
-                        ...(payload.settings || {})
-                    };
-                    this.pushState.subscriptionCount = Number(payload.subscription_count || this.pushState.subscriptionCount || 0);
-                    this.pushState.vapidConfigured = !!payload.vapid_configured;
-                    this.pushState.message = 'Ustawienia powiadomien zapisane.';
                 },
 
                 async sendTestNotification() {
                     const response = await fetch(`${this.API}/notifications/test`, { method: 'POST' });
                     if (!response.ok) {
-                        alert(await this.getApiErrorMessage(response, 'Nie udalo sie wyslac testowego powiadomienia.'));
+                        this.showToast(await this.getApiErrorMessage(response, 'Nie udalo sie wyslac testowego powiadomienia.'));
                         return;
                     }
                     this.pushState.message = 'Wyslano testowe powiadomienie.';
+                    this.showToast('Test wysłany. Pojawił się też w historii.', 'success');
+                    await this.loadNotificationHistory();
                 },
 
                 getPushPermissionLabel() {
@@ -1274,21 +1534,37 @@
                 },
 
                 getMedicationStatusLabel(item) {
+                    if (!item?.active) return 'wstrzymany';
                     if (!item?.scheduled_today) return 'nie dzis';
                     return item?.done ? 'odhaczone' : 'do odhaczenia';
                 },
 
                 getMedicationStatusClass(item) {
+                    if (!item?.active) return 'bg-violet-50 text-violet-700';
                     if (!item?.scheduled_today) return 'bg-slate-100 text-slate-500';
                     return item?.done ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700';
                 },
 
                 resetMedicationDraft() {
+                    this.editingMedicationId = null;
                     this.newMedication = {
                         name: '',
                         schedule_type: 'daily',
                         reminder_time: '08:00'
                     };
+                },
+
+                editMedication(medication) {
+                    if (!medication) return;
+                    this.editingMedicationId = Number(medication.id) || null;
+                    this.newMedication = {
+                        name: medication.name || '',
+                        schedule_type: this.normalizeMedicationScheduleType(medication.schedule_type),
+                        reminder_time: this.sanitizeDueTime(medication.reminder_time, '08:00') || '08:00'
+                    };
+                    window.requestAnimationFrame(() => {
+                        document.querySelector('.meds-form-card')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    });
                 },
 
                 shiftMedicationsDate(step) {
@@ -1312,6 +1588,10 @@
 
                 getMonthlyDueLabel(task) {
                     const dueTime = this.getMonthlyDueTime(task);
+                    if (task?.overdue && task?.date_key) {
+                        const source = this.keyToDate(task.date_key);
+                        return `zalegle od ${source.getDate()}.${String(source.getMonth() + 1).padStart(2, '0')} • ${dueTime}`;
+                    }
                     if (this.normalizeMonthlyRepeatType(task?.repeat_type) === 'weekly') {
                         const dayLabel = this.getWeekdayLabel(task?.repeat_weekday);
                         if (task?.date_key) {
@@ -1327,6 +1607,7 @@
 
                 getMonthlyDueBadgeClass(task) {
                     if (task?.done) return 'bg-slate-100 text-slate-500';
+                    if (task?.overdue) return 'bg-red-50 text-red-600';
                     const dateKey = this.sanitizeDateKey(task?.date_key);
                     if (!dateKey) return 'bg-slate-100 text-slate-500';
                     const currentMonth = this.getCurrentMonthKey();
@@ -1478,13 +1759,16 @@
                     const targetMonthKey = this.getMonthKeyFromDateKey(dateKey);
                     if (targetMonthKey !== (this.monthlyMonthKey || this.getCurrentMonthKey())) return [];
                     return this.monthlyTasks
-                        .filter(task => this.sanitizeDateKey(task?.date_key) === dateKey)
+                        .filter(task => this.sanitizeDateKey(task?.display_date_key || task?.date_key) === dateKey)
                         .map(task => ({
                             type: 'monthly',
                             id: `monthly-${task.instance_id || task.id}-${dateKey}`,
                             dateKey,
                             item: task,
-                            done: !!task.done
+                            done: !!task.done,
+                            isCarriedOver: !!task.overdue,
+                            delayDays: task?.overdue ? Math.max(0, this.getDaysBetweenDateKeys(task.date_key, dateKey)) : 0,
+                            sourceDateKey: task.date_key
                         }));
                 },
 
@@ -2021,6 +2305,7 @@
                 },
 
                 getCalendarEntryUrgencyRank(entry) {
+                    if (entry?.type === 'monthly') return entry?.isCarriedOver ? 0 : 3;
                     if (entry?.type !== 'task') return 4;
                     if (entry?.isCarriedOver || this.isTaskOverdue(entry?.item)) return 0;
                     if (this.normalizePriorityValue(entry?.item?.priority) === 'P1') return 1;
@@ -2092,7 +2377,7 @@
                 },
 
                 getCalendarCarryOverLabel(entry) {
-                    if (entry?.type !== 'task' || !entry?.isCarriedOver) return '';
+                    if (!entry?.isCarriedOver) return '';
                     if (entry.delayDays <= 1) return 'z wczoraj';
                     return `z ${entry.delayDays} dni temu`;
                 },
@@ -2605,7 +2890,7 @@
                     if (value === null) return;
                     const next = Number(value);
                     if (!Number.isFinite(next) || next <= 0) {
-                        alert('Podaj liczbe wieksza od 0.');
+                        this.showToast('Podaj liczbe wieksza od 0.');
                         return;
                     }
                     this.dailyGoal = Math.round(next);
@@ -3175,17 +3460,19 @@
                 },
 
                 async deleteTask(taskId) {
-                    if (!confirm('Na pewno usunac to zadanie?')) return false;
-                    await fetch(`${this.API}/tasks/${taskId}`, { method: 'DELETE' });
-                    await this.init();
-                    return true;
+                    return this.queueUndoableAction('Zadanie zostanie usunięte za chwilę.', async () => {
+                        const response = await fetch(`${this.API}/tasks/${taskId}`, { method: 'DELETE' });
+                        if (!response.ok) throw new Error(await this.getApiErrorMessage(response, 'Nie udało się usunąć zadania.'));
+                        await this.init();
+                        this.showToast('Zadanie usunięte.', 'success');
+                    });
                 },
 
                 async shareTaskPrompt(taskId) {
                     const id = Number(taskId);
                     const task = this.getTaskById(id) || (Number(this.editingTask?.id) === id ? this.editingTask : null);
                     if (!id || !this.canShareTask(task)) {
-                        alert('Tylko wlasciciel moze udostepnic to zadanie.');
+                        this.showToast('Tylko wlasciciel moze udostepnic to zadanie.');
                         return false;
                     }
 
@@ -3202,7 +3489,7 @@
                         });
 
                         if (!response.ok) {
-                            alert(await this.getApiErrorMessage(response, 'Nie udalo sie udostepnic zadania.'));
+                            this.showToast(await this.getApiErrorMessage(response, 'Nie udalo sie udostepnic zadania.'));
                             return false;
                         }
 
@@ -3213,7 +3500,7 @@
                         }
                         return true;
                     } catch (error) {
-                        alert('Nie udalo sie udostepnic zadania. Sprawdz polaczenie z backendem.');
+                        this.showToast('Nie udalo sie udostepnic zadania. Sprawdz polaczenie z backendem.');
                         return false;
                     }
                 },
@@ -3222,24 +3509,19 @@
                     if (!module) return false;
                     const taskCount = this.tasks.filter(task => task.module_id === module.id).length;
                     const suffix = taskCount === 1 ? 'zadanie' : (taskCount >= 2 && taskCount <= 4 ? 'zadania' : 'zadan');
-                    if (!confirm(`Usunac modul "${module.name}" razem z ${taskCount} ${suffix}?`)) return false;
-
-                    const response = await fetch(`${this.API}/modules/${module.id}`, { method: 'DELETE' });
-                    if (!response.ok) {
-                        alert('Nie udalo sie usunac modulu.');
-                        return false;
-                    }
-
-                    if (this.activeModule?.id === module.id) {
-                        this.activeModule = null;
-                        this.setTaskScope('all');
-                    }
-
-                    await this.init();
-                    if (!this.activeModule && this.modules.length > 0) {
-                        this.activeModule = this.getSidebarModules()[0] || this.modules[0];
-                    }
-                    return true;
+                    return this.queueUndoableAction(`Moduł „${module.name}” i ${taskCount} ${suffix} zostaną usunięte.`, async () => {
+                        const response = await fetch(`${this.API}/modules/${module.id}`, { method: 'DELETE' });
+                        if (!response.ok) throw new Error('Nie udało się usunąć modułu.');
+                        if (this.activeModule?.id === module.id) {
+                            this.activeModule = null;
+                            this.setTaskScope('all');
+                        }
+                        await this.init();
+                        if (!this.activeModule && this.modules.length > 0) {
+                            this.activeModule = this.getSidebarModules()[0] || this.modules[0];
+                        }
+                        this.showToast('Moduł usunięty.', 'success');
+                    });
                 },
 
                 async quickMove(task, direction) {
@@ -3350,13 +3632,13 @@
                         const warningMessage = typeof detail === 'object' && detail?.message
                             ? detail.message
                             : 'Polaczone zadanie przekroczy limit 8h w kalendarzu.';
-                        const acceptOverflow = confirm(`${warningMessage}\n\nKliknij OK, aby polaczyc mimo to.`);
+                        const acceptOverflow = await this.askConfirmation(warningMessage, 'Połącz mimo to');
                         if (!acceptOverflow) return false;
                         return this.mergeTasks(sourceTask, targetTask, name, true);
                     }
 
                     if (!response.ok) {
-                        alert(await this.getApiErrorMessage(response, 'Nie udalo sie polaczyc zadan.'));
+                        this.showToast(await this.getApiErrorMessage(response, 'Nie udalo sie polaczyc zadan.'));
                         return false;
                     }
 
@@ -3383,7 +3665,7 @@
                     const targetHasSubtasks = this.getTaskBundleCount(targetTask) > 0;
                     let mergeName = '';
                     if (targetHasSubtasks) {
-                        if (!confirm(this.getTaskMergePrompt(sourceTask, targetTask))) return;
+                        if (!await this.askConfirmation(this.getTaskMergePrompt(sourceTask, targetTask), 'Połącz zadania')) return;
                         mergeName = targetTask.name || '';
                     } else {
                         const defaultName = this.getMergeDefaultName(sourceTask, targetTask);
@@ -3391,7 +3673,7 @@
                         if (pickedName === null) return;
                         mergeName = pickedName.trim();
                         if (!mergeName) {
-                            alert('Nazwa zadania zbiorczego nie moze byc pusta.');
+                            this.showToast('Nazwa zadania zbiorczego nie moze byc pusta.');
                             return;
                         }
                     }
@@ -3451,10 +3733,16 @@
 
                 openNewTaskModal(preferredModuleId = null) {
                     this.isCreatingTask = true;
+                    this.taskFormError = '';
+                    const assignableModules = this.getAssignableModules();
+                    const preferredId = this.normalizeOptionalId(preferredModuleId);
+                    const preferredModule = assignableModules.find(module => Number(module.id) === Number(preferredId));
+                    const activeModule = assignableModules.find(module => Number(module.id) === Number(this.activeModule?.id));
+                    const defaultModule = preferredModule || activeModule || assignableModules[0] || null;
                     this.editingTask = {
                         id: null,
                         name: '',
-                        module_id: this.normalizeOptionalId(preferredModuleId) || '',
+                        module_id: defaultModule ? String(defaultModule.id) : '',
                         description: '',
                         due_date: '',
                         due_time: '',
@@ -3470,6 +3758,7 @@
 
                 openTaskModal(task) {
                     this.isCreatingTask = false;
+                    this.taskFormError = '';
                     const baseSubtasks = this.normalizeSubtasks(task?.subtasks);
                     const needsLegacySubtaskDefaults = baseSubtasks.length > 0 && (
                         !this.hasConfiguredSubtaskTimes(baseSubtasks) || !this.hasConfiguredSubtaskPoints(baseSubtasks)
@@ -3534,6 +3823,7 @@
 
                 async saveTask() {
                     try {
+                        this.taskFormError = '';
                         const pickedDueDate = this.$refs?.taskDueDateInput?.value || this.editingTask.due_date;
                         const pickedDueTime = this.$refs?.taskDueTimeInput?.value || this.editingTask.due_time;
                         this.editingTask.due_date = this.sanitizeDateKey(pickedDueDate);
@@ -3545,6 +3835,13 @@
                         this.editingTask.points_weight = this.normalizePointsWeight(this.editingTask.points_weight);
                         this.editingTask.subtasks = this.normalizeSubtasks(this.editingTask.subtasks);
                         const payload = this.pickTaskPayload(this.editingTask);
+                        if (!payload.module_id) {
+                            this.taskFormError = this.getAssignableModules().length > 0
+                                ? 'Wybierz modul. Dzieki temu zadanie nie zniknie po ukonczeniu.'
+                                : 'Najpierw utworz modul, a potem zapisz zadanie.';
+                            this.$nextTick(() => this.$refs?.taskModuleInput?.focus());
+                            return;
+                        }
                         const subtasks = this.normalizeSubtasks(payload.subtasks);
                         if (subtasks.length > 0) {
                             for (let index = 0; index < subtasks.length; index++) {
@@ -3552,11 +3849,11 @@
                                 const subtaskMinutes = this.normalizeSubtaskEstimatedMinutes(subtask.estimated_time);
                                 const subtaskPoints = this.normalizeSubtaskPointsWeight(subtask.points_weight);
                                 if (subtaskMinutes <= 0) {
-                                    alert(`Podzadanie #${index + 1} musi miec czas wiekszy od 0 minut.`);
+                                    this.showToast(`Podzadanie #${index + 1} musi miec czas wiekszy od 0 minut.`);
                                     return;
                                 }
                                 if (subtaskPoints <= 0) {
-                                    alert(`Podzadanie #${index + 1} musi miec punkty wieksze od 0.`);
+                                    this.showToast(`Podzadanie #${index + 1} musi miec punkty wieksze od 0.`);
                                     return;
                                 }
                             }
@@ -3567,18 +3864,18 @@
 
                         payload.name = (payload.name || '').trim();
                         if (!payload.name) {
-                            alert('Podaj nazwe zadania.');
+                            this.showToast('Podaj nazwe zadania.');
                             return;
                         }
 
                         if (payload.estimated_time <= 0) {
-                            alert('Podaj szacowany czas zadania (minuty, wiecej niz 0).');
+                            this.showToast('Podaj szacowany czas zadania (minuty, wiecej niz 0).');
                             return;
                         }
 
                         payload.points_weight = this.normalizePointsWeight(payload.points_weight);
                         if (payload.points_weight <= 0) {
-                            alert('Waga zadania musi byc wieksza od 0.');
+                            this.showToast('Waga zadania musi byc wieksza od 0.');
                             return;
                         }
 
@@ -3621,13 +3918,13 @@
                                 ? detail.message
                                 : defaultMessage;
 
-                            const acceptOverflow = confirm(`${warningMessage}\n\nKliknij OK, aby zapisac mimo to.`);
+                            const acceptOverflow = await this.askConfirmation(warningMessage, 'Zapisz mimo to');
                             if (!acceptOverflow) return;
                             response = await sendPayload(true);
                         }
 
                         if (!response.ok) {
-                            alert(await this.getApiErrorMessage(response, 'Nie udalo sie zapisac zadania.'));
+                            this.showToast(await this.getApiErrorMessage(response, 'Nie udalo sie zapisac zadania.'));
                             return;
                         }
 
@@ -3635,7 +3932,7 @@
                         this.isCreatingTask = false;
                         await this.init();
                     } catch (error) {
-                        alert('Nie udalo sie zapisac zadania. Sprawdz polaczenie z backendem i odswiez strone.');
+                        this.showToast('Nie udalo sie zapisac zadania. Sprawdz polaczenie z backendem i odswiez strone.');
                     }
                 },
 
@@ -3650,6 +3947,29 @@
                         this.taskModal = false;
                         this.isCreatingTask = false;
                     }
+                },
+
+                async addModuleForTask() {
+                    const name = prompt('Nazwa nowego modulu:');
+                    if (name === null) return;
+                    const cleanName = name.trim();
+                    if (!cleanName) {
+                        this.taskFormError = 'Nazwa modulu nie moze byc pusta.';
+                        return;
+                    }
+                    const response = await fetch(`${this.API}/modules`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ name: cleanName, category: 'praca' })
+                    });
+                    if (!response.ok) {
+                        this.taskFormError = await this.getApiErrorMessage(response, 'Nie udalo sie utworzyc modulu.');
+                        return;
+                    }
+                    const created = await response.json();
+                    await this.loadModules();
+                    this.editingTask.module_id = String(created.id);
+                    this.taskFormError = '';
                 },
 
                 async addModulePrompt(categoryHint = '') {
@@ -3705,7 +4025,7 @@
                         body: JSON.stringify({ title, content })
                     });
                     if (!response.ok) {
-                        alert(await this.getApiErrorMessage(response, 'Nie udalo sie utworzyc notatki.'));
+                        this.showToast(await this.getApiErrorMessage(response, 'Nie udalo sie utworzyc notatki.'));
                         return null;
                     }
                     const note = this.normalizeBrainDumpNote(await response.json());
@@ -3732,14 +4052,13 @@
                 async deleteBrainDumpNote(noteId = null) {
                     const targetId = Number(noteId || this.activeBrainDumpNoteId);
                     if (!targetId) return;
-                    if (!confirm('Usunac te notatke?')) return;
-                    const response = await fetch(`${this.API}/brain-dump-notes/${targetId}`, { method: 'DELETE' });
-                    if (!response.ok) {
-                        alert(await this.getApiErrorMessage(response, 'Nie udalo sie usunac notatki.'));
-                        return;
-                    }
-                    this.brainDumpNotes = this.brainDumpNotes.filter(note => note.id !== targetId);
-                    this.applyActiveBrainDumpNote(this.brainDumpNotes[0] || null);
+                    return this.queueUndoableAction('Notatka zostanie usunięta za chwilę.', async () => {
+                        const response = await fetch(`${this.API}/brain-dump-notes/${targetId}`, { method: 'DELETE' });
+                        if (!response.ok) throw new Error(await this.getApiErrorMessage(response, 'Nie udało się usunąć notatki.'));
+                        this.brainDumpNotes = this.brainDumpNotes.filter(note => note.id !== targetId);
+                        this.applyActiveBrainDumpNote(this.brainDumpNotes[0] || null);
+                        this.showToast('Notatka usunięta.', 'success');
+                    });
                 },
 
                 async saveBrainDump(quiet = false) {
@@ -3777,7 +4096,7 @@
                             /* ignore storage write errors */
                         }
                         if (!quiet) {
-                            alert('Nie udalo sie zapisac notatki na serwerze. Zostala zabezpieczona lokalnie.');
+                            this.showToast('Nie udalo sie zapisac notatki na serwerze. Zostala zabezpieczona lokalnie.');
                         }
                         return false;
                     }
@@ -3815,17 +4134,17 @@
 
                 async sendBrainDumpToModule() {
                     if (!this.brainDumpTargetModuleId) {
-                        alert('Najpierw wybierz modul.');
+                        this.showToast('Najpierw wybierz modul.');
                         return;
                     }
 
                     const lines = (this.brainDump || '').split('\n').map(line => line.trim()).filter(Boolean);
                     if (lines.length === 0) {
-                        alert('Aktywna notatka jest pusta.');
+                        this.showToast('Aktywna notatka jest pusta.');
                         return;
                     }
 
-                    if (!confirm(`Stworzyc ${lines.length} zadan z aktywnej notatki?`)) return;
+                    if (!await this.askConfirmation(`Utworzyć ${lines.length} zadań z aktywnej notatki?`, 'Utwórz zadania')) return;
 
                     for (const line of lines) {
                         await fetch(`${this.API}/tasks`, {
@@ -4249,7 +4568,7 @@
 
                 toggleCanvasLinkMode() {
                     if (!this.selectedCanvasNodeId) {
-                        alert('Najpierw wybierz element, od ktorego chcesz poprowadzic strzalke.');
+                        this.showToast('Najpierw wybierz element, od ktorego chcesz poprowadzic strzalke.');
                         return;
                     }
                     if (this.canvasLinkDraftFromId) {
@@ -4460,13 +4779,25 @@
                 },
 
                 clearCanvasBoard() {
-                    if (!confirm('Wyczysc cala tablice robocza?')) return;
+                    const previousNodes = this.canvasNodes.map(node => ({ ...node }));
+                    const previousLinks = this.canvasLinks.map(link => ({ ...link }));
                     this.canvasNodes = [];
                     this.canvasLinks = [];
                     this.selectedCanvasNodeId = null;
                     this.selectedCanvasLinkId = null;
                     this.canvasLinkDraftFromId = null;
                     this.saveCanvasBoard();
+                    this.showToast('Tablica wyczyszczona.', 'warning', {
+                        duration: 7000,
+                        actionLabel: 'Cofnij',
+                        onAction: () => {
+                            this.canvasNodes = previousNodes;
+                            this.canvasLinks = previousLinks;
+                            this.saveCanvasBoard();
+                            this.showToast('Przywrócono tablicę.', 'success');
+                        },
+                        closable: false
+                    });
                 },
 
                 serializeCanvasBoard() {
@@ -4540,7 +4871,7 @@
                         } catch (writeError) {
                             /* ignore storage write errors */
                         }
-                        if (!quiet) alert('Nie udalo sie zapisac dokumentu na serwerze. Kopia zostala lokalnie.');
+                        if (!quiet) this.showToast('Nie udalo sie zapisac dokumentu na serwerze. Kopia zostala lokalnie.');
                         return false;
                     }
                 },
@@ -4562,10 +4893,10 @@
                 },
 
                 async resetRewardWallet() {
-                    if (!confirm('Wyzerowac dostepny budzet punktowy po zakupie nagrody?')) return;
+                    if (!await this.askConfirmation('Wyzerować dostępny budżet punktowy po zakupie nagrody?', 'Wyzeruj')) return;
                     const response = await fetch(`${this.API}/rewards/reset`, { method: 'POST' });
                     if (!response.ok) {
-                        alert(await this.getApiErrorMessage(response, 'Nie udalo sie zresetowac portfela punktow.'));
+                        this.showToast(await this.getApiErrorMessage(response, 'Nie udalo sie zresetowac portfela punktow.'));
                         return;
                     }
                     const payload = await response.json();
@@ -4581,12 +4912,15 @@
                 async addMedication() {
                     const name = (this.newMedication.name || '').trim();
                     if (!name) {
-                        alert('Podaj nazwe leku.');
+                        this.showToast('Podaj nazwe leku.');
                         return;
                     }
 
-                    const response = await fetch(`${this.API}/medications`, {
-                        method: 'POST',
+                    const medicationId = Number(this.editingMedicationId || 0);
+                    const response = await fetch(
+                        medicationId ? `${this.API}/medications/${medicationId}` : `${this.API}/medications`,
+                        {
+                        method: medicationId ? 'PUT' : 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
                             name,
@@ -4596,12 +4930,29 @@
                     });
 
                     if (!response.ok) {
-                        alert(await this.getApiErrorMessage(response, 'Nie udalo sie dodac leku.'));
+                        this.showToast(await this.getApiErrorMessage(response, medicationId ? 'Nie udalo sie zapisac zmian leku.' : 'Nie udalo sie dodac leku.'));
                         return;
                     }
 
                     this.resetMedicationDraft();
                     await this.loadMedications();
+                    this.showToast(medicationId ? 'Zmiany leku zapisane.' : 'Lek dodany do planu.', 'success');
+                },
+
+                async toggleMedicationActive(medication) {
+                    if (!medication) return;
+                    const nextActive = !medication.active;
+                    const response = await fetch(`${this.API}/medications/${medication.id}`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ active: nextActive })
+                    });
+                    if (!response.ok) {
+                        this.showToast(await this.getApiErrorMessage(response, 'Nie udało się zmienić stanu leku.'));
+                        return;
+                    }
+                    await this.loadMedications();
+                    this.showToast(nextActive ? 'Lek wznowiony.' : 'Lek wstrzymany. Nie będzie przypomnień.', 'success');
                 },
 
                 async toggleMedicationDone(medication, checked) {
@@ -4616,7 +4967,7 @@
                     });
 
                     if (!response.ok) {
-                        alert(await this.getApiErrorMessage(response, 'Nie udalo sie odhaczyc leku.'));
+                        this.showToast(await this.getApiErrorMessage(response, 'Nie udalo sie odhaczyc leku.'));
                         return;
                     }
 
@@ -4624,25 +4975,27 @@
                 },
 
                 async deleteMedication(medicationId) {
-                    if (!confirm('Usunac to przypomnienie o leku?')) return;
-                    const response = await fetch(`${this.API}/medications/${medicationId}`, { method: 'DELETE' });
-                    if (!response.ok) {
-                        alert(await this.getApiErrorMessage(response, 'Nie udalo sie usunac leku.'));
-                        return;
-                    }
-                    await this.loadMedications();
+                    return this.queueUndoableAction('Lek zostanie usunięty za chwilę.', async () => {
+                        const response = await fetch(`${this.API}/medications/${medicationId}`, { method: 'DELETE' });
+                        if (!response.ok) {
+                            throw new Error(await this.getApiErrorMessage(response, 'Nie udało się usunąć leku.'));
+                        }
+                        if (Number(this.editingMedicationId) === Number(medicationId)) this.resetMedicationDraft();
+                        await this.loadMedications();
+                        this.showToast('Lek usunięty.', 'success');
+                    });
                 },
 
                 async addMonthlyTask() {
                     const name = (this.newMonthlyTaskName || '').trim();
                     if (!name) {
-                        alert('Podaj nazwe zadania miesiecznego.');
+                        this.showToast('Podaj nazwe zadania cyklicznego.');
                         return;
                     }
                     const repeatType = this.normalizeMonthlyRepeatType(this.newMonthlyTaskRepeatType);
                     const dueDay = repeatType === 'monthly' ? this.normalizeMonthlyDueDay(this.newMonthlyTaskDueDay) : 0;
                     if (repeatType === 'monthly' && !dueDay) {
-                        alert('Podaj dzien miesiaca.');
+                        this.showToast('Podaj dzien miesiaca.');
                         return;
                     }
                     const dueTime = this.sanitizeDueTime(this.newMonthlyTaskDueTime, '23:59') || '23:59';
@@ -4661,7 +5014,7 @@
                     });
 
                     if (!response.ok) {
-                        alert(await this.getApiErrorMessage(response, taskId ? 'Nie udalo sie zapisac zadania miesiecznego.' : 'Nie udalo sie dodac zadania miesiecznego.'));
+                        this.showToast(await this.getApiErrorMessage(response, taskId ? 'Nie udalo sie zapisac zadania cyklicznego.' : 'Nie udalo sie dodac zadania cyklicznego.'));
                         return;
                     }
 
@@ -4673,7 +5026,7 @@
                     if (!task) return;
                     const name = (task.name || '').trim();
                     if (!name) {
-                        alert('Nazwa zadania miesiecznego nie moze byc pusta.');
+                        this.showToast('Nazwa zadania cyklicznego nie moze byc pusta.');
                         await this.loadMonthlyTasks();
                         return;
                     }
@@ -4693,7 +5046,7 @@
                     });
 
                     if (!response.ok) {
-                        alert(await this.getApiErrorMessage(response, 'Nie udalo sie zapisac zadania miesiecznego.'));
+                        this.showToast(await this.getApiErrorMessage(response, 'Nie udalo sie zapisac zadania cyklicznego.'));
                     }
 
                     await this.loadMonthlyTasks();
@@ -4712,7 +5065,7 @@
                     });
 
                     if (!response.ok) {
-                        alert('Nie udalo sie zaktualizowac statusu.');
+                        this.showToast('Nie udalo sie zaktualizowac statusu.');
                         return;
                     }
 
@@ -4732,7 +5085,7 @@
                     });
 
                     if (!response.ok) {
-                        alert('Nie udalo sie zapisac notatki.');
+                        this.showToast('Nie udalo sie zapisac notatki.');
                         return;
                     }
 
@@ -4740,19 +5093,18 @@
                 },
 
                 async deleteMonthlyTask(taskId) {
-                    if (!confirm('Usunac to zadanie miesieczne?')) return;
-                    const response = await fetch(`${this.API}/monthly-tasks/${taskId}`, { method: 'DELETE' });
-                    if (!response.ok) {
-                        alert('Nie udalo sie usunac zadania miesiecznego.');
-                        return;
-                    }
-                    await this.loadMonthlyTasks();
+                    return this.queueUndoableAction('Zadanie cykliczne zostanie usunięte za chwilę.', async () => {
+                        const response = await fetch(`${this.API}/monthly-tasks/${taskId}`, { method: 'DELETE' });
+                        if (!response.ok) throw new Error('Nie udało się usunąć zadania cyklicznego.');
+                        await this.loadMonthlyTasks();
+                        this.showToast('Zadanie cykliczne usunięte.', 'success');
+                    });
                 },
 
                 async addDebt() {
                     const name = (this.newDebt.name || '').trim();
                     if (!name) {
-                        alert('Podaj nazwe pozycji splaty.');
+                        this.showToast('Podaj nazwe pozycji splaty.');
                         return;
                     }
 
@@ -4773,7 +5125,7 @@
                     });
 
                     if (!response.ok) {
-                        alert(await this.getApiErrorMessage(response, 'Nie udalo sie dodac pozycji splaty.'));
+                        this.showToast(await this.getApiErrorMessage(response, 'Nie udalo sie dodac pozycji splaty.'));
                         return;
                     }
 
@@ -4782,13 +5134,12 @@
                 },
 
                 async deleteDebt(debtId) {
-                    if (!confirm('Usunac te pozycje splaty?')) return;
-                    const response = await fetch(`${this.API}/debts/${debtId}`, { method: 'DELETE' });
-                    if (!response.ok) {
-                        alert('Nie udalo sie usunac pozycji splaty.');
-                        return;
-                    }
-                    await this.loadDebts(this.debtsMonthKey || this.getCurrentMonthKey());
+                    return this.queueUndoableAction('Pozycja finansowa zostanie usunięta za chwilę.', async () => {
+                        const response = await fetch(`${this.API}/debts/${debtId}`, { method: 'DELETE' });
+                        if (!response.ok) throw new Error('Nie udało się usunąć pozycji finansowej.');
+                        await this.loadDebts(this.debtsMonthKey || this.getCurrentMonthKey());
+                        this.showToast('Pozycja finansowa usunięta.', 'success');
+                    });
                 },
 
                 async toggleDebtDoneForMonth(debt, dateKey, forceDone = null) {
@@ -4804,7 +5155,7 @@
                         })
                     });
                     if (!response.ok) {
-                        alert('Nie udalo sie zapisac statusu splaty.');
+                        this.showToast('Nie udalo sie zapisac statusu splaty.');
                         return;
                     }
                     await this.loadDebts(monthKey);
@@ -4825,14 +5176,14 @@
                             const serverMessage = typeof data?.detail === 'string'
                                 ? data.detail
                                 : (typeof data?.error === 'string' ? data.error : '');
-                            alert(serverMessage || 'Nie udalo sie rozbic zadania przez AI.');
+                            this.showToast(serverMessage || 'Nie udalo sie rozbic zadania przez AI.');
                             return;
                         }
 
                         this.taskModal = false;
                         await this.init();
                     } catch (error) {
-                        alert('Blad polaczenia z Ollama.');
+                        this.showToast('Blad polaczenia z Ollama.');
                     } finally {
                         this.isShredding = false;
                     }
@@ -4852,7 +5203,7 @@
                 async startFlow() {
                     const candidate = this.getFocusTask();
                     if (!candidate) {
-                        alert('Najpierw dodaj zadanie do planera.');
+                        this.showToast('Najpierw dodaj zadanie do planera.');
                         return;
                     }
 

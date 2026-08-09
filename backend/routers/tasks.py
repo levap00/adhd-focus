@@ -102,7 +102,13 @@ def _normalize_optional_int(raw_value: Any) -> int | None:
 
 
 def _normalize_reminder_offset_minutes(raw_value: Any) -> int:
-    return min(1440, parse_non_negative_int(raw_value, default=0))
+    try:
+        parsed = int(raw_value)
+    except (TypeError, ValueError):
+        return 0
+    if parsed < 0:
+        return -1
+    return min(1440, parsed)
 
 
 def _normalize_subtasks(raw_subtasks: Any) -> list[dict]:
@@ -1390,6 +1396,8 @@ def add_task(payload: TaskCreate):
     clean_due_date = normalize_due_date(payload.due_date)
     clean_due_time = normalize_due_time(payload.due_time, default="") if clean_due_date else ""
     clean_module_id = _normalize_optional_int(payload.module_id)
+    if clean_module_id is None:
+        raise HTTPException(status_code=400, detail="Wybierz modul dla zadania.")
     clean_reminder_offset_minutes = _normalize_reminder_offset_minutes(payload.reminder_offset_minutes)
     safe_estimated_time = parse_non_negative_int(payload.estimated_time)
     safe_points_weight = _normalize_points_weight(payload.points_weight)
@@ -1403,13 +1411,12 @@ def add_task(payload: TaskCreate):
         raise HTTPException(status_code=400, detail="Podaj szacowany czas zadania (minuty, wiecej niz 0).")
 
     with get_db() as conn:
-        if clean_module_id is not None:
-            module_exists = conn.execute(
-                "SELECT 1 FROM modules WHERE id = ? AND owner_user_id = ?",
-                (clean_module_id, current_account.id),
-            ).fetchone()
-            if not module_exists:
-                raise HTTPException(status_code=404, detail="Modul nie znaleziony")
+        module_exists = conn.execute(
+            "SELECT 1 FROM modules WHERE id = ? AND owner_user_id = ?",
+            (clean_module_id, current_account.id),
+        ).fetchone()
+        if not module_exists:
+            raise HTTPException(status_code=404, detail="Modul nie znaleziony")
 
         limit_date = _task_limit_date(clean_due_date, clean_status, clean_description)
         planned_before = _get_daily_planned_minutes(conn, current_account, limit_date)
@@ -1517,13 +1524,16 @@ def update_task(task_id: int, task_data: TaskUpdate):
 
         if "module_id" in update_data:
             update_data["module_id"] = _normalize_optional_int(update_data["module_id"])
-            if update_data["module_id"] is not None:
-                module_exists = conn.execute(
-                    "SELECT 1 FROM modules WHERE id = ? AND owner_user_id = ?",
-                    (update_data["module_id"], current_account.id),
-                ).fetchone()
-                if not module_exists:
-                    raise HTTPException(status_code=404, detail="Modul nie znaleziony")
+
+        next_module_id = _normalize_optional_int(update_data.get("module_id", existing_task.get("module_id")))
+        if next_module_id is None:
+            raise HTTPException(status_code=400, detail="Wybierz modul dla zadania.")
+        module_exists = conn.execute(
+            "SELECT 1 FROM modules WHERE id = ? AND owner_user_id = ?",
+            (next_module_id, int(existing_task.get("owner_user_id") or 0)),
+        ).fetchone()
+        if not module_exists:
+            raise HTTPException(status_code=404, detail="Modul nie znaleziony")
 
         if "due_date" in update_data or "due_time" in update_data:
             next_due_date = normalize_due_date(update_data.get("due_date", existing_task.get("due_date", "")))

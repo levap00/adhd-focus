@@ -1,4 +1,6 @@
 import asyncio
+import fcntl
+import logging
 import json
 import os
 from datetime import date, datetime, time as dt_time, timedelta
@@ -13,6 +15,7 @@ from backend.db import get_db
 from backend.utils import normalize_due_time, utc_now_iso
 
 
+logger = logging.getLogger(__name__)
 WEB_PUSH_SCHEDULE_ENABLED = str(os.getenv("WEB_PUSH_SCHEDULE_ENABLED", "1")).strip().lower() in {
     "1",
     "true",
@@ -20,14 +23,11 @@ WEB_PUSH_SCHEDULE_ENABLED = str(os.getenv("WEB_PUSH_SCHEDULE_ENABLED", "1")).str
     "on",
 }
 WEB_PUSH_SCHEDULE_GRACE_MINUTES = max(1, int(os.getenv("WEB_PUSH_SCHEDULE_GRACE_MINUTES", "10")))
-WEB_PUSH_MEDICATION_REPEAT_WINDOW_HOURS = min(
-    24,
-    max(1, int(os.getenv("WEB_PUSH_MEDICATION_REPEAT_WINDOW_HOURS", "12"))),
-)
 WEB_PUSH_DEFAULT_TIMEZONE = os.getenv("WEB_PUSH_DEFAULT_TIMEZONE", "Europe/Warsaw").strip() or "Europe/Warsaw"
 VAPID_SUBJECT = os.getenv("VAPID_SUBJECT", "mailto:admin@example.com").strip() or "mailto:admin@example.com"
 
 _scheduler_task: Optional[asyncio.Task] = None
+_scheduler_lock_file = None
 
 
 def get_vapid_public_key() -> str:
@@ -132,14 +132,21 @@ def send_notification_to_user(user_id: int, payload: dict[str, Any]) -> dict[str
 def _settings_from_row(row) -> dict[str, Any]:
     return {
         "enabled": bool(row["enabled"]),
+        "quiet_hours_enabled": bool(row["quiet_hours_enabled"]),
+        "quiet_hours_start": normalize_due_time(row["quiet_hours_start"], "22:00") or "22:00",
+        "quiet_hours_end": normalize_due_time(row["quiet_hours_end"], "07:00") or "07:00",
         "opening_enabled": bool(row["opening_enabled"]),
         "opening_time": normalize_due_time(row["opening_time"], "08:00") or "08:00",
         "day_summary_enabled": bool(row["day_summary_enabled"]),
         "day_summary_time": normalize_due_time(row["day_summary_time"], "20:30") or "20:30",
         "medication_enabled": bool(row["medication_enabled"]),
+        "medication_repeat_enabled": bool(row["medication_repeat_enabled"]),
         "medication_repeat_minutes": max(1, int(row["medication_repeat_minutes"] or 5)),
+        "medication_repeat_window_minutes": max(1, int(row["medication_repeat_window_minutes"] or 120)),
+        "task_due_enabled": bool(row["task_due_enabled"]),
         "task_reminder_enabled": bool(row["task_reminder_enabled"]),
         "task_reminder_repeat_minutes": max(15, int(row["task_reminder_repeat_minutes"] or 120)),
+        "task_reminder_window_minutes": max(15, int(row["task_reminder_window_minutes"] or 480)),
         "timezone": (row["timezone"] or WEB_PUSH_DEFAULT_TIMEZONE).strip() or WEB_PUSH_DEFAULT_TIMEZONE,
     }
 
@@ -160,6 +167,19 @@ def _is_time_due(now: datetime, raw_time: str, fallback: str) -> bool:
     planned_time = _parse_schedule_time(raw_time, fallback)
     scheduled_at = datetime.combine(now.date(), planned_time, tzinfo=now.tzinfo)
     return scheduled_at <= now <= scheduled_at + timedelta(minutes=WEB_PUSH_SCHEDULE_GRACE_MINUTES)
+
+
+def _is_quiet_time(now: datetime, settings: dict[str, Any]) -> bool:
+    if not settings["quiet_hours_enabled"]:
+        return False
+    start = _parse_schedule_time(settings["quiet_hours_start"], "22:00")
+    end = _parse_schedule_time(settings["quiet_hours_end"], "07:00")
+    current = now.timetz().replace(tzinfo=None)
+    if start == end:
+        return False
+    if start < end:
+        return start <= current < end
+    return current >= start or current < end
 
 
 def _user_has_active_subscription(conn, user_id: int) -> bool:
@@ -191,10 +211,88 @@ def _release_marker(conn, user_id: int, marker_key: str) -> None:
     conn.commit()
 
 
-def _send_scheduled_notification(conn, user_id: int, payload: dict[str, Any], marker_key: str) -> None:
-    result = send_notification_to_user(user_id, payload)
+def _record_notification_history(
+    conn,
+    user_id: int,
+    payload: dict[str, Any],
+    kind: str,
+    reason: str,
+    result: dict[str, int],
+    marker_key: str = "",
+) -> None:
+    sent_count = max(0, int(result.get("sent") or 0))
+    failed_count = max(0, int(result.get("failed") or 0))
+    status = "sent" if sent_count > 0 else "failed"
+    conn.execute(
+        """
+        INSERT INTO notification_delivery_history (
+            owner_user_id, kind, title, body, reason, status,
+            sent_count, failed_count, marker_key, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            user_id,
+            (kind or "other")[:64],
+            str(payload.get("title") or "")[:250],
+            str(payload.get("body") or "")[:1000],
+            (reason or "Brak dodatkowego opisu.")[:1000],
+            status,
+            sent_count,
+            failed_count,
+            (marker_key or "")[:250],
+            utc_now_iso(),
+        ),
+    )
+    conn.commit()
+
+
+def record_notification_history(
+    user_id: int,
+    payload: dict[str, Any],
+    kind: str,
+    reason: str,
+    result: dict[str, int],
+    marker_key: str = "",
+) -> None:
+    with get_db() as conn:
+        _record_notification_history(conn, user_id, payload, kind, reason, result, marker_key)
+
+
+def _send_scheduled_notification(
+    conn,
+    user_id: int,
+    payload: dict[str, Any],
+    marker_key: str,
+    kind: str,
+    reason: str,
+) -> None:
+    try:
+        result = send_notification_to_user(user_id, payload)
+    except Exception as exc:
+        _record_notification_history(
+            conn,
+            user_id,
+            payload,
+            kind,
+            f"{reason} Wysyłka zakończyła się błędem: {str(exc)[:200]}",
+            {"sent": 0, "failed": 1},
+            marker_key,
+        )
+        _release_marker(conn, user_id, marker_key)
+        logger.exception("Scheduled web push failed before delivery result for user %s marker %s", user_id, marker_key)
+        raise
+
+    _record_notification_history(conn, user_id, payload, kind, reason, result, marker_key)
     if int(result.get("sent") or 0) <= 0:
         _release_marker(conn, user_id, marker_key)
+        if int(result.get("failed") or 0) > 0:
+            logger.warning(
+                "Scheduled web push had no successful deliveries for user %s marker %s: %s",
+                user_id,
+                marker_key,
+                result,
+            )
 
 
 def _parse_date(raw: str) -> Optional[date]:
@@ -348,7 +446,14 @@ def _process_opening(conn, user_id: int, settings: dict[str, Any], now: datetime
     today_tasks = [task for task in open_tasks if _parse_date(task.get("due_date", "")) == now.date()]
     overdue = [task for task in open_tasks if (_parse_date(task.get("due_date", "")) or now.date()) < now.date()]
     body = f"Dzis: {len(today_tasks)}. Po terminie: {len(overdue)}. Start: {_format_task_names(today_tasks or overdue or open_tasks)}"
-    _send_scheduled_notification(conn, user_id, _push_payload("Start dnia", body, marker, "/"), marker)
+    _send_scheduled_notification(
+        conn,
+        user_id,
+        _push_payload("Start dnia", body, marker, "/"),
+        marker,
+        "opening",
+        f"Zaplanowany start dnia o {settings['opening_time']}.",
+    )
 
 
 def _process_day_summary(conn, user_id: int, settings: dict[str, Any], now: datetime, tz: ZoneInfo) -> None:
@@ -363,7 +468,14 @@ def _process_day_summary(conn, user_id: int, settings: dict[str, Any], now: date
     meds = _medications_for_date(conn, user_id, now.date())
     meds_open = len([item for item in meds if int(item.get("done") or 0) == 0])
     body = f"Zrobione: {done_today}. Otwarte: {len(open_tasks)}. Leki do odhaczenia: {meds_open}."
-    _send_scheduled_notification(conn, user_id, _push_payload("Podsumowanie dnia", body, marker, "/"), marker)
+    _send_scheduled_notification(
+        conn,
+        user_id,
+        _push_payload("Podsumowanie dnia", body, marker, "/"),
+        marker,
+        "day_summary",
+        f"Zaplanowane podsumowanie dnia o {settings['day_summary_time']}.",
+    )
 
 
 def _process_medications(conn, user_id: int, settings: dict[str, Any], now: datetime) -> None:
@@ -371,7 +483,8 @@ def _process_medications(conn, user_id: int, settings: dict[str, Any], now: date
         return
 
     repeat_seconds = max(1, int(settings["medication_repeat_minutes"])) * 60
-    repeat_window = timedelta(hours=WEB_PUSH_MEDICATION_REPEAT_WINDOW_HOURS)
+    repeat_window = timedelta(minutes=max(1, int(settings["medication_repeat_window_minutes"])))
+    due_medications: list[dict[str, Any]] = []
     dose_days = [now.date(), now.date() - timedelta(days=1)]
     for dose_day in dose_days:
         for medication in _medications_for_date(conn, user_id, dose_day):
@@ -383,14 +496,83 @@ def _process_medications(conn, user_id: int, settings: dict[str, Any], now: date
             if delay.total_seconds() < 0 or delay > repeat_window:
                 continue
 
-            dose_key = dose_day.isoformat()
-            bucket = int(delay.total_seconds() // repeat_seconds)
-            marker = f"webpush:med:{medication['id']}:{dose_key}:{bucket}"
-            if not _claim_marker(conn, user_id, marker):
-                continue
-            body = f"{medication.get('name') or 'Lek'} czeka od {dose_key} {reminder_time.strftime('%H:%M')}."
-            url = f"/?view=meds&med_date={dose_key}"
-            _send_scheduled_notification(conn, user_id, _push_payload("Lek do odhaczenia", body, marker, url), marker)
+            due_medications.append({
+                **medication,
+                "dose_key": dose_day.isoformat(),
+                "reminder_label": reminder_time.strftime("%H:%M"),
+                "scheduled_at": scheduled_at,
+            })
+
+    if not due_medications:
+        return
+
+    due_medications.sort(key=lambda item: (item["scheduled_at"], (item.get("name") or "").lower()))
+    initial_groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for medication in due_medications:
+        group_key = (medication["dose_key"], medication["reminder_label"])
+        initial_groups.setdefault(group_key, []).append(medication)
+
+    sent_initial_group = False
+    for (dose_key, reminder_label), medications in initial_groups.items():
+        marker = f"webpush:meds:initial:{dose_key}:{reminder_label.replace(':', '')}"
+        if not _claim_marker(conn, user_id, marker):
+            continue
+        sent_initial_group = True
+        names = _format_medication_names(medications)
+        if len(medications) == 1:
+            title = "Lek do odhaczenia"
+            body = f"{names} czeka od {reminder_label}."
+        else:
+            title = f"Leki do odhaczenia ({len(medications)})"
+            body = f"Jedno przypomnienie dla dawki {reminder_label}: {names}."
+        url = f"/?view=meds&med_date={dose_key}"
+        payload = _push_payload(title, body, f"webpush:meds:open:{dose_key}", url)
+        _send_scheduled_notification(
+            conn,
+            user_id,
+            payload,
+            marker,
+            "medication",
+            f"{len(medications)} nieodhaczony lek zaplanowany na {reminder_label}."
+            if len(medications) == 1
+            else f"{len(medications)} nieodhaczone leki zaplanowane na tę samą godzinę {reminder_label}; wysłano je razem.",
+        )
+
+    if sent_initial_group or not settings["medication_repeat_enabled"]:
+        return
+
+    repeat_due = [
+        item
+        for item in due_medications
+        if now - item["scheduled_at"] > timedelta(minutes=WEB_PUSH_SCHEDULE_GRACE_MINUTES)
+    ]
+    if not repeat_due:
+        return
+
+    bucket = int(now.timestamp() // repeat_seconds)
+    marker = f"webpush:meds:repeat:{now.date().isoformat()}:{bucket}"
+    if not _claim_marker(conn, user_id, marker):
+        return
+    first = repeat_due[0]
+    names = _format_medication_names(repeat_due)
+    title = "Lek nadal czeka" if len(repeat_due) == 1 else f"Leki nadal czekaja ({len(repeat_due)})"
+    body = f"Do odhaczenia: {names}."
+    url = f"/?view=meds&med_date={first['dose_key']}"
+    payload = _push_payload(title, body, f"webpush:meds:open:{first['dose_key']}", url)
+    _send_scheduled_notification(
+        conn,
+        user_id,
+        payload,
+        marker,
+        "medication_repeat",
+        f"Włączone ponawianie: {len(repeat_due)} leków nadal nie było odhaczonych.",
+    )
+
+
+def _format_medication_names(medications: list[dict[str, Any]], limit: int = 4) -> str:
+    names = [(item.get("name") or "Lek").strip() for item in medications[:limit]]
+    suffix = f" +{len(medications) - limit}" if len(medications) > limit else ""
+    return ", ".join(names) + suffix
 
 
 def _task_reminder_offset_minutes(task: dict[str, Any]) -> int:
@@ -398,33 +580,68 @@ def _task_reminder_offset_minutes(task: dict[str, Any]) -> int:
         value = int(task.get("reminder_offset_minutes") or 0)
     except (TypeError, ValueError):
         value = 0
-    return min(1440, max(0, value))
+    if value < 0:
+        return -1
+    return min(1440, value)
 
 
-def _process_due_task_notifications(conn, user_id: int, now: datetime, tz: ZoneInfo) -> None:
+def _process_due_task_notifications(
+    conn,
+    user_id: int,
+    settings: dict[str, Any],
+    now: datetime,
+    tz: ZoneInfo,
+) -> None:
+    if not settings["task_due_enabled"]:
+        return
+
+    notification_groups: dict[str, list[dict[str, Any]]] = {}
     for task in _sort_tasks(_open_task_rows(conn, user_id), tz):
         due_at = _task_due_at(task, tz)
         if not due_at:
             continue
 
         offset_minutes = _task_reminder_offset_minutes(task)
+        if offset_minutes < 0:
+            continue
         scheduled_at = due_at - timedelta(minutes=offset_minutes)
         if not (scheduled_at <= now <= scheduled_at + timedelta(minutes=WEB_PUSH_SCHEDULE_GRACE_MINUTES)):
             continue
 
-        task_id = int(task.get("id") or 0)
-        marker = f"webpush:task-due:{task_id}:{due_at.strftime('%Y%m%d%H%M')}:{offset_minutes}"
+        group_key = scheduled_at.strftime("%Y%m%d%H%M")
+        notification_groups.setdefault(group_key, []).append({
+            **task,
+            "due_at": due_at,
+            "offset_minutes": offset_minutes,
+        })
+
+    for group_key, tasks in notification_groups.items():
+        marker = f"webpush:task-due-group:{group_key}"
         if not _claim_marker(conn, user_id, marker):
             continue
 
-        due_label = due_at.strftime("%H:%M")
-        when_label = "teraz" if offset_minutes <= 0 else f"za {offset_minutes} min"
-        module_name = (task.get("module_name") or "").strip()
-        module_suffix = f" ({module_name})" if module_name else ""
-        body = f"{task.get('name') or 'Zadanie'}{module_suffix}: {when_label}, start {due_label}."
-        title = "Czas na zadanie" if offset_minutes <= 0 else "Zadanie sie zbliza"
+        first = tasks[0]
+        due_at = first["due_at"]
+        offset_minutes = int(first["offset_minutes"])
+        if len(tasks) == 1:
+            module_name = (first.get("module_name") or "").strip()
+            module_suffix = f" ({module_name})" if module_name else ""
+            when_label = "teraz" if offset_minutes <= 0 else f"za {offset_minutes} min"
+            body = f"{first.get('name') or 'Zadanie'}{module_suffix}: {when_label}, start {due_at.strftime('%H:%M')}."
+            title = "Czas na zadanie" if offset_minutes <= 0 else "Zadanie sie zbliza"
+        else:
+            title = f"Zadania czekaja ({len(tasks)})"
+            body = _format_task_names(tasks, limit=4)
         url = f"/?view=calendar&date={due_at.date().isoformat()}"
-        _send_scheduled_notification(conn, user_id, _push_payload(title, body, marker, url), marker)
+        push_tag = f"webpush:task-due-group:{group_key}"
+        _send_scheduled_notification(
+            conn,
+            user_id,
+            _push_payload(title, body, push_tag, url),
+            marker,
+            "task_due",
+            f"{len(tasks)} zadań osiągnęło ustawiony czas przypomnienia; zdarzenia z tej samej minuty połączono.",
+        )
 
 
 def _process_task_reminders(conn, user_id: int, settings: dict[str, Any], now: datetime, tz: ZoneInfo) -> None:
@@ -432,14 +649,15 @@ def _process_task_reminders(conn, user_id: int, settings: dict[str, Any], now: d
         return
 
     open_tasks = _sort_tasks(_open_task_rows(conn, user_id), tz)
-    due_tasks = [
-        task
-        for task in open_tasks
-        if (
-            _task_due_at(task, tz)
-            and (_task_due_at(task, tz) + timedelta(minutes=WEB_PUSH_SCHEDULE_GRACE_MINUTES)) < now
-        )
-    ]
+    reminder_window = timedelta(minutes=max(15, int(settings["task_reminder_window_minutes"])))
+    due_tasks = []
+    for task in open_tasks:
+        due_at = _task_due_at(task, tz)
+        if not due_at or _task_reminder_offset_minutes(task) < 0:
+            continue
+        delay = now - due_at
+        if timedelta(minutes=WEB_PUSH_SCHEDULE_GRACE_MINUTES) < delay <= reminder_window:
+            due_tasks.append(task)
     if not due_tasks:
         return
 
@@ -450,7 +668,30 @@ def _process_task_reminders(conn, user_id: int, settings: dict[str, Any], now: d
         return
 
     body = f"Do ogarniecia: {len(due_tasks)}. Najpierw: {_format_task_names(due_tasks)}"
-    _send_scheduled_notification(conn, user_id, _push_payload("Przypomnienie fokusowe", body, marker, "/"), marker)
+    push_tag = f"webpush:tasks:{now.date().isoformat()}"
+    _send_scheduled_notification(
+        conn,
+        user_id,
+        _push_payload("Przypomnienie fokusowe", body, push_tag, "/"),
+        marker,
+        "task_overdue",
+        f"{len(due_tasks)} zadań nadal było po terminie w aktywnym oknie przypomnień.",
+    )
+
+
+def _cleanup_old_delivery_markers(conn) -> None:
+    cutoff = (datetime.utcnow() - timedelta(days=14)).replace(microsecond=0).isoformat() + "+00:00"
+    conn.execute("DELETE FROM notification_delivery_markers WHERE created_at < ?", (cutoff,))
+    history_cutoff = (datetime.utcnow() - timedelta(days=90)).replace(microsecond=0).isoformat() + "+00:00"
+    conn.execute("DELETE FROM notification_delivery_history WHERE created_at < ?", (history_cutoff,))
+    conn.commit()
+
+
+def _run_notification_processor(name: str, func, *args) -> None:
+    try:
+        func(*args)
+    except Exception:
+        logger.exception("Web push processor %s failed", name)
 
 
 def process_scheduled_web_push_notifications() -> None:
@@ -463,20 +704,29 @@ def process_scheduled_web_push_notifications() -> None:
             SELECT
                 u.id AS user_id,
                 COALESCE(ns.enabled, 1) AS enabled,
+                COALESCE(ns.quiet_hours_enabled, 1) AS quiet_hours_enabled,
+                COALESCE(ns.quiet_hours_start, '22:00') AS quiet_hours_start,
+                COALESCE(ns.quiet_hours_end, '07:00') AS quiet_hours_end,
                 COALESCE(ns.opening_enabled, 1) AS opening_enabled,
                 COALESCE(ns.opening_time, '08:00') AS opening_time,
                 COALESCE(ns.day_summary_enabled, 1) AS day_summary_enabled,
                 COALESCE(ns.day_summary_time, '20:30') AS day_summary_time,
                 COALESCE(ns.medication_enabled, 1) AS medication_enabled,
+                COALESCE(ns.medication_repeat_enabled, 0) AS medication_repeat_enabled,
                 COALESCE(ns.medication_repeat_minutes, 5) AS medication_repeat_minutes,
+                COALESCE(ns.medication_repeat_window_minutes, 120) AS medication_repeat_window_minutes,
+                COALESCE(ns.task_due_enabled, 1) AS task_due_enabled,
                 COALESCE(ns.task_reminder_enabled, 1) AS task_reminder_enabled,
                 COALESCE(ns.task_reminder_repeat_minutes, 120) AS task_reminder_repeat_minutes,
+                COALESCE(ns.task_reminder_window_minutes, 480) AS task_reminder_window_minutes,
                 COALESCE(ns.timezone, ?) AS timezone
             FROM users u
             LEFT JOIN notification_settings ns ON ns.owner_user_id = u.id
             """,
             (WEB_PUSH_DEFAULT_TIMEZONE,),
         ).fetchall()
+
+        _cleanup_old_delivery_markers(conn)
 
         for row in rows:
             user_id = int(row["user_id"])
@@ -485,11 +735,13 @@ def process_scheduled_web_push_notifications() -> None:
                 continue
             tz = _get_tz(settings["timezone"])
             now = datetime.now(tz)
-            _process_opening(conn, user_id, settings, now, tz)
-            _process_day_summary(conn, user_id, settings, now, tz)
-            _process_medications(conn, user_id, settings, now)
-            _process_due_task_notifications(conn, user_id, now, tz)
-            _process_task_reminders(conn, user_id, settings, now, tz)
+            if _is_quiet_time(now, settings):
+                continue
+            _run_notification_processor("opening", _process_opening, conn, user_id, settings, now, tz)
+            _run_notification_processor("day_summary", _process_day_summary, conn, user_id, settings, now, tz)
+            _run_notification_processor("medications", _process_medications, conn, user_id, settings, now)
+            _run_notification_processor("due_tasks", _process_due_task_notifications, conn, user_id, settings, now, tz)
+            _run_notification_processor("task_reminders", _process_task_reminders, conn, user_id, settings, now, tz)
 
 
 async def _scheduler_loop() -> None:
@@ -498,8 +750,34 @@ async def _scheduler_loop() -> None:
             await asyncio.to_thread(process_scheduled_web_push_notifications)
         except Exception:
             # The scheduler must survive transient network, DB, and push-service errors.
-            pass
+            logger.exception("Web push scheduler tick failed")
         await asyncio.sleep(30)
+
+
+def _try_acquire_scheduler_lock() -> bool:
+    global _scheduler_lock_file
+    if _scheduler_lock_file is not None:
+        return True
+    lock_path = PROJECT_ROOT / ".web-push-scheduler.lock"
+    lock_file = lock_path.open("a+")
+    try:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        lock_file.close()
+        return False
+    _scheduler_lock_file = lock_file
+    return True
+
+
+def _release_scheduler_lock() -> None:
+    global _scheduler_lock_file
+    if _scheduler_lock_file is None:
+        return
+    try:
+        fcntl.flock(_scheduler_lock_file.fileno(), fcntl.LOCK_UN)
+    finally:
+        _scheduler_lock_file.close()
+        _scheduler_lock_file = None
 
 
 def register_web_push_scheduler(app: FastAPI) -> None:
@@ -507,6 +785,9 @@ def register_web_push_scheduler(app: FastAPI) -> None:
     async def _start_web_push_scheduler() -> None:
         global _scheduler_task
         if not WEB_PUSH_SCHEDULE_ENABLED:
+            return
+        if not _try_acquire_scheduler_lock():
+            logger.warning("Web push scheduler is already running in another process; skipping this instance")
             return
         if _scheduler_task is None or _scheduler_task.done():
             _scheduler_task = asyncio.create_task(_scheduler_loop(), name="web-push-scheduler")
@@ -522,3 +803,4 @@ def register_web_push_scheduler(app: FastAPI) -> None:
         except asyncio.CancelledError:
             pass
         _scheduler_task = None
+        _release_scheduler_lock()
