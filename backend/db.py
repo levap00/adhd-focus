@@ -157,6 +157,37 @@ def _init_db() -> None:
 
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS sharing_connections (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                requester_user_id INTEGER NOT NULL,
+                recipient_user_id INTEGER NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT '',
+                responded_at TEXT NOT NULL DEFAULT '',
+                UNIQUE(requester_user_id, recipient_user_id),
+                CHECK(requester_user_id != recipient_user_id),
+                FOREIGN KEY (requester_user_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (recipient_user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sharing_connections_recipient_status "
+            "ON sharing_connections(recipient_user_id, status, updated_at)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sharing_connections_requester_status "
+            "ON sharing_connections(requester_user_id, status, updated_at)"
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_sharing_connections_unique_pair "
+            "ON sharing_connections(MIN(requester_user_id, recipient_user_id), "
+            "MAX(requester_user_id, recipient_user_id))"
+        )
+
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS task_reward_claims (
                 task_id INTEGER PRIMARY KEY,
                 user_id INTEGER NOT NULL,
@@ -485,6 +516,7 @@ def _init_db() -> None:
         conn.execute("UPDATE tasks SET estimated_time = 0 WHERE estimated_time IS NULL")
         conn.execute("UPDATE tasks SET points_weight = 1 WHERE points_weight IS NULL OR points_weight <= 0")
         conn.execute("UPDATE tasks SET status = 'przygotowanie' WHERE status IN ('analiza', 'wstepne')")
+        conn.execute("UPDATE tasks SET due_date = '', due_time = '' WHERE status = 'obserwacja'")
         conn.execute("UPDATE task_subtasks SET title = '' WHERE title IS NULL")
         conn.execute("UPDATE task_subtasks SET position = 0 WHERE position IS NULL")
         conn.execute("UPDATE task_subtasks SET done = 0 WHERE done IS NULL")

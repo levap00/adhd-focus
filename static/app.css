@@ -272,6 +272,10 @@ body.theme-dark {
     color: #f8fafc;
 }
 
+.desktop-view-nav > .desktop-combined-nav {
+    display: none;
+}
+
 .topbar-progress {
     color: #0f172a;
 }
@@ -966,6 +970,13 @@ body.theme-dark .compact-pill {
     opacity: 0.94;
 }
 
+.kanban-col-watchlist {
+    border-color: rgba(139, 92, 246, 0.3);
+    background:
+        radial-gradient(120% 120% at 50% -15%, rgba(167, 139, 250, 0.14), transparent 62%),
+        rgba(245, 243, 255, 0.76);
+}
+
 .kanban-task-done-card {
     border-style: dashed;
     padding-top: 0.35rem;
@@ -982,6 +993,12 @@ body.theme-dark .compact-pill {
 
 .kanban-mini-done {
     opacity: 0.92;
+}
+
+.kanban-mini-watchlist {
+    border-color: rgba(139, 92, 246, 0.3);
+    box-shadow: inset 0 0 0 1px rgba(167, 139, 250, 0.14);
+    background: rgba(245, 243, 255, 0.72);
 }
 
 .kanban-mini-done-task {
@@ -1009,6 +1026,14 @@ body.theme-dark .kanban-mini-focus {
     background:
         radial-gradient(120% 120% at 50% -15%, rgba(6, 182, 212, 0.24), transparent 64%),
         rgba(8, 47, 73, 0.52);
+}
+
+body.theme-dark .kanban-col-watchlist,
+body.theme-dark .kanban-mini-watchlist {
+    border-color: rgba(167, 139, 250, 0.4);
+    background:
+        radial-gradient(120% 120% at 50% -15%, rgba(124, 58, 237, 0.2), transparent 62%),
+        rgba(46, 16, 101, 0.32);
 }
 
 .kanban-col-droppable {
@@ -2191,6 +2216,29 @@ body.theme-dark .calendar-cell {
     overflow-wrap: anywhere;
 }
 
+.calendar-unscheduled-time-label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    color: #64748b;
+    font-size: 0.62rem;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.calendar-unscheduled-time-input {
+    width: 7.2rem;
+    border: 1px solid #cbd5e1;
+    border-radius: 10px;
+    background: #f8fafc;
+    padding: 0.38rem 0.48rem;
+    color: #0f172a;
+    font-size: 0.76rem;
+    font-weight: 800;
+    letter-spacing: normal;
+}
+
 .task-workload-notice {
     border: 1px solid rgba(148, 163, 184, 0.32);
     border-radius: 16px;
@@ -2488,6 +2536,12 @@ body.theme-dark button:hover {
     .bottom-nav,
     .fab-speed-dial {
         display: none;
+    }
+}
+
+@media (min-width: 1280px) {
+    .desktop-view-nav > .desktop-combined-nav {
+        display: inline-block;
     }
 }
 

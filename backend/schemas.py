@@ -68,7 +68,12 @@ class TaskUpdate(BaseModel):
 
 
 class TaskSharePayload(BaseModel):
-    username: str = Field(..., min_length=3, max_length=64)
+    user_id: Optional[int] = None
+    username: Optional[str] = Field(None, min_length=3, max_length=64)
+
+
+class SharingInvitationCreate(BaseModel):
+    username: str = Field(..., min_length=3, max_length=64, pattern=r"^[a-zA-Z0-9_.-]+$")
 
 
 class TaskMergePayload(BaseModel):

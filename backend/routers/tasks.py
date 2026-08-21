@@ -77,6 +77,23 @@ def _task_share_count(conn, task_id: int) -> int:
     return int(row["total"] or 0) if row else 0
 
 
+def _has_accepted_sharing_connection(conn, first_user_id: int, second_user_id: int) -> bool:
+    row = conn.execute(
+        """
+        SELECT 1
+        FROM sharing_connections
+        WHERE status = 'accepted'
+          AND (
+                (requester_user_id = ? AND recipient_user_id = ?)
+             OR (requester_user_id = ? AND recipient_user_id = ?)
+          )
+        LIMIT 1
+        """,
+        (first_user_id, second_user_id, second_user_id, first_user_id),
+    ).fetchone()
+    return bool(row)
+
+
 def _claim_task_reward(conn, task_id: int, user_id: int, points_weight: float) -> None:
     conn.execute(
         """
@@ -226,11 +243,38 @@ def _list_subtasks_by_task_ids(conn, task_ids: list[int]) -> dict[int, list[dict
     return grouped
 
 
+def _list_shares_by_task_ids(conn, task_ids: list[int]) -> dict[int, list[dict]]:
+    if not task_ids:
+        return {}
+    placeholders = ", ".join(["?"] * len(task_ids))
+    rows = conn.execute(
+        f"""
+        SELECT s.task_id, s.shared_user_id, s.shared_at, u.username
+        FROM task_shares s
+        JOIN users u ON u.id = s.shared_user_id
+        WHERE s.task_id IN ({placeholders})
+        ORDER BY LOWER(u.username), u.id
+        """,
+        task_ids,
+    ).fetchall()
+    grouped: dict[int, list[dict]] = {task_id: [] for task_id in task_ids}
+    for row in rows:
+        grouped.setdefault(int(row["task_id"]), []).append(
+            {
+                "user_id": int(row["shared_user_id"]),
+                "username": row["username"] or "",
+                "shared_at": row["shared_at"] or "",
+            }
+        )
+    return grouped
+
+
 def _row_to_task_payload(
     row,
     role: str,
     share_count: int = 0,
     subtasks: list[dict] | None = None,
+    shares: list[dict] | None = None,
 ) -> dict:
     task = dict(row)
     task["id"] = int(task["id"])
@@ -240,6 +284,10 @@ def _row_to_task_payload(
     task["shared_role"] = role
     task["share_count"] = share_count
     task["subtasks"] = subtasks or []
+    task["due_date"] = normalize_due_date(task.get("due_date") or "")
+    task["due_time"] = normalize_due_time(task.get("due_time") or "", default="") if task["due_date"] else ""
+    task["shares"] = shares or []
+    task["shared_user_ids"] = [int(item["user_id"]) for item in task["shares"]]
     return task
 
 
@@ -271,6 +319,7 @@ def _list_accessible_tasks(current_account: AccountConfig) -> list[dict]:
         ).fetchall()
         task_ids = [int(row["id"]) for row in rows]
         subtasks_by_task = _list_subtasks_by_task_ids(conn, task_ids)
+        shares_by_task = _list_shares_by_task_ids(conn, task_ids)
         tasks = []
         for row in rows:
             role = "owner" if int(row["owner_user_id"] or 0) == current_account.id else "shared"
@@ -281,6 +330,7 @@ def _list_accessible_tasks(current_account: AccountConfig) -> list[dict]:
                     role=role,
                     share_count=int(row["share_count"] or 0),
                     subtasks=subtasks_by_task.get(task_id, []),
+                    shares=shares_by_task.get(task_id, []),
                 )
             )
         return tasks
@@ -881,23 +931,53 @@ def get_all_tasks():
 @router.post("/tasks/{task_id}/share")
 def share_task(task_id: int, payload: TaskSharePayload):
     current_account = _current_account()
-    invited_account = get_user_by_username(payload.username)
-    if not invited_account:
-        raise HTTPException(status_code=404, detail="Uzytkownik do udostepnienia nie istnieje.")
-    if invited_account.id == current_account.id:
-        raise HTTPException(status_code=400, detail="Nie mozna udostepnic zadania samemu sobie.")
     if task_id <= 0:
         raise HTTPException(status_code=403, detail="Tylko wlasciciel moze dalej udostepniac zadanie.")
 
     with get_db() as conn:
+        requested_user_id = _normalize_optional_int(payload.user_id)
+        if requested_user_id is not None:
+            invited_user = conn.execute(
+                "SELECT id, username FROM users WHERE id = ?",
+                (requested_user_id,),
+            ).fetchone()
+        else:
+            clean_username = (payload.username or "").strip()
+            invited_user = conn.execute(
+                "SELECT id, username FROM users WHERE username = ?",
+                (clean_username,),
+            ).fetchone() if clean_username else None
+        if not invited_user:
+            raise HTTPException(status_code=404, detail="Uzytkownik do udostepnienia nie istnieje.")
+        invited_user_id = int(invited_user["id"])
+        invited_username = invited_user["username"] or ""
+        if invited_user_id == current_account.id:
+            raise HTTPException(status_code=400, detail="Nie mozna udostepnic zadania samemu sobie.")
+
         task = conn.execute(
-            "SELECT id, owner_user_id FROM tasks WHERE id = ?",
+            "SELECT id, owner_user_id, due_date, due_time FROM tasks WHERE id = ?",
             (task_id,),
         ).fetchone()
         if not task:
             raise HTTPException(status_code=404, detail="Zadanie nie znalezione")
         if int(task["owner_user_id"] or 0) != current_account.id:
             raise HTTPException(status_code=403, detail="Tylko wlasciciel moze udostepnic zadanie.")
+        if not _has_accepted_sharing_connection(conn, current_account.id, invited_user_id):
+            raise HTTPException(
+                status_code=403,
+                detail="Najpierw wyslij tej osobie zaproszenie w ustawieniach i poczekaj na akceptacje.",
+            )
+
+        clean_due_date = normalize_due_date(task["due_date"] or "")
+        clean_due_time = normalize_due_time(task["due_time"] or "", default="") if clean_due_date else ""
+        if clean_due_date and not clean_due_time:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "sharing_time_required",
+                    "message": "Ustaw godzine zadania przed udostepnieniem, aby trafilo na os czasu obu osob.",
+                },
+            )
 
         existing = conn.execute(
             """
@@ -905,7 +985,7 @@ def share_task(task_id: int, payload: TaskSharePayload):
             FROM task_shares
             WHERE task_id = ? AND shared_user_id = ?
             """,
-            (task_id, invited_account.id),
+            (task_id, invited_user_id),
         ).fetchone()
         if existing:
             raise HTTPException(status_code=409, detail="Zadanie jest juz udostepnione temu uzytkownikowi.")
@@ -915,14 +995,16 @@ def share_task(task_id: int, payload: TaskSharePayload):
             INSERT INTO task_shares (task_id, shared_user_id, shared_at)
             VALUES (?, ?, ?)
             """,
-            (task_id, invited_account.id, utc_now_iso()),
+            (task_id, invited_user_id, utc_now_iso()),
         )
         conn.commit()
 
     return {
         "status": "shared",
         "task_id": task_id,
-        "shared_with": invited_account.username,
+        "shared_with": invited_username,
+        "due_date": clean_due_date,
+        "due_time": clean_due_time,
     }
 
 
@@ -1291,6 +1373,9 @@ def merge_tasks(payload: TaskMergePayload):
         next_status = _choose_parent_status(target_task, source_task, merged_subtasks)
         next_priority = _choose_parent_priority([target_task, source_task])
         next_due_date, next_due_time = _choose_parent_due([target_task, source_task])
+        if next_status == "obserwacja":
+            next_due_date = ""
+            next_due_time = ""
         next_module_id = _normalize_optional_int(target_task.get("module_id"))
 
         limit_date = _task_limit_date(next_due_date, next_status, next_description)
@@ -1395,6 +1480,9 @@ def add_task(payload: TaskCreate):
     clean_description = (payload.description or "").strip()
     clean_due_date = normalize_due_date(payload.due_date)
     clean_due_time = normalize_due_time(payload.due_time, default="") if clean_due_date else ""
+    if clean_status == "obserwacja":
+        clean_due_date = ""
+        clean_due_time = ""
     clean_module_id = _normalize_optional_int(payload.module_id)
     if clean_module_id is None:
         raise HTTPException(status_code=400, detail="Wybierz modul dla zadania.")
@@ -1555,6 +1643,10 @@ def update_task(task_id: int, task_data: TaskUpdate):
         next_due_date_for_limit = update_data.get("due_date", existing_task.get("due_date", ""))
         next_estimated_time = parse_non_negative_int(update_data.get("estimated_time", existing_task.get("estimated_time", 0)))
         next_status_for_limit = update_data.get("status", existing_task.get("status", ""))
+        if normalize_status(next_status_for_limit) == "obserwacja":
+            update_data["due_date"] = ""
+            update_data["due_time"] = ""
+            next_due_date_for_limit = ""
         next_description_for_limit = update_data.get("description", existing_task.get("description", ""))
         limit_date = _task_limit_date(next_due_date_for_limit, next_status_for_limit, next_description_for_limit)
         planned_before = _get_daily_planned_minutes(conn, current_account, limit_date, exclude_task_id=task_id)

@@ -58,6 +58,15 @@
                 isCreatingTask: false,
                 editingTask: {},
                 taskFormError: '',
+                doneTasksExpanded: false,
+                sharingConnections: [],
+                incomingSharingInvitations: [],
+                outgoingSharingInvitations: [],
+                sharingInviteUsername: '',
+                sharingLoading: false,
+                shareTaskModal: false,
+                sharingTaskId: null,
+                shareTaskDueTime: '',
                 priorityFilter: 'ALL',
                 sortOrder: 'none',
                 API: '',
@@ -164,7 +173,7 @@
                     { id: 'oczekujace', name: 'Oczekujace', color: 'text-slate-500' },
                     { id: 'przygotowanie', name: 'Review / Hold', color: 'text-amber-600' },
                     { id: 'todo', name: 'Teraz robie', color: 'text-cyan-600' },
-                    { id: 'gotowe', name: 'Gotowe', color: 'text-emerald-600' }
+                    { id: 'obserwacja', name: 'Watchlist', color: 'text-violet-600' }
                 ],
                 taskReminderOptions: [
                     { value: -1, label: 'Nie powiadamiaj' },
@@ -229,6 +238,9 @@
                 handleViewportResize() {
                     const isMobile = this.detectMobileLayout();
                     this.isMobileLayout = isMobile;
+                    if (isMobile && this.view === 'combined') {
+                        this.view = 'calendar';
+                    }
                     if (!isMobile) {
                         this.mobileModulesOpen = true;
                     }
@@ -383,7 +395,11 @@
                             this.calendarCursor = calendarDate;
                         }
                         consumed = true;
-                    } else if (['dash', 'kanban', 'global', 'calendar', 'brain', 'canvas', 'docs', 'monthly', 'debts', 'notifications'].includes(requestedView)) {
+                    } else if (requestedView === 'combined') {
+                        this.view = this.isMobileLayout ? 'calendar' : 'combined';
+                        this.setTaskScope('all');
+                        consumed = true;
+                    } else if (['dash', 'kanban', 'global', 'calendar', 'brain', 'canvas', 'docs', 'monthly', 'debts', 'notifications', 'sharing'].includes(requestedView)) {
                         this.view = requestedView;
                         consumed = true;
                     }
@@ -426,6 +442,7 @@
                         this.loadBrainDump(),
                         this.loadNotificationSettings(),
                         this.loadNotificationHistory(),
+                        this.loadSharingConnections(),
                         this.loadCanvasBoard(),
                         this.loadProjectDoc(),
                         this.loadMonthlyTasks(),
@@ -520,6 +537,15 @@
                     }
                     if (target === 'calendar') {
                         this.openCalendarView();
+                        return;
+                    }
+                    if (target === 'combined' && !this.isMobileLayout) {
+                        this.setTaskScope('all');
+                        this.view = 'combined';
+                        this.closeMobileModules();
+                        if (!this.calendarCursor) this.calendarCursor = this.getTodayKey();
+                        if (!this.selectedDate) this.selectedDate = this.getTodayKey();
+                        this.syncCalendarMonthData();
                     }
                 },
 
@@ -530,9 +556,10 @@
                         this.view = 'brain';
                         return;
                     }
-                    const allowedViews = ['canvas', 'docs', 'monthly', 'meds', 'debts', 'notifications'];
+                    const allowedViews = ['canvas', 'docs', 'monthly', 'meds', 'debts', 'notifications', 'sharing'];
                     if (allowedViews.includes(target)) {
                         this.view = target;
+                        if (target === 'sharing') this.loadSharingConnections();
                     }
                 },
 
@@ -670,7 +697,7 @@
                 normalizeTaskStatus(status) {
                     const value = (status || 'oczekujace').toString().trim().toLowerCase();
                     if (value === 'analiza' || value === 'wstepne') return 'przygotowanie';
-                    return ['oczekujace', 'przygotowanie', 'todo', 'gotowe'].includes(value) ? value : 'oczekujace';
+                    return ['oczekujace', 'przygotowanie', 'todo', 'obserwacja', 'gotowe'].includes(value) ? value : 'oczekujace';
                 },
 
                 normalizePointsWeight(value) {
@@ -876,8 +903,82 @@
                         shared_role: (task.shared_role || 'owner').toString(),
                         share_count: Number(task.share_count || 0),
                         owner_username: (task.owner_username || '').toString(),
+                        shares: Array.isArray(task.shares) ? task.shares : [],
+                        shared_user_ids: Array.isArray(task.shared_user_ids)
+                            ? task.shared_user_ids.map(Number).filter(Number.isFinite)
+                            : [],
                         subtasks: this.normalizeSubtasks(task.subtasks)
                     }));
+                },
+
+                async loadSharingConnections() {
+                    try {
+                        const response = await fetch(`${this.API}/sharing`);
+                        if (!response.ok) throw new Error('sharing_load_failed');
+                        const payload = await response.json();
+                        this.sharingConnections = Array.isArray(payload.connections) ? payload.connections : [];
+                        this.incomingSharingInvitations = Array.isArray(payload.incoming) ? payload.incoming : [];
+                        this.outgoingSharingInvitations = Array.isArray(payload.outgoing) ? payload.outgoing : [];
+                    } catch (error) {
+                        this.sharingConnections = [];
+                        this.incomingSharingInvitations = [];
+                        this.outgoingSharingInvitations = [];
+                    }
+                },
+
+                async sendSharingInvitation() {
+                    const username = (this.sharingInviteUsername || '').trim();
+                    if (!username || this.sharingLoading) return;
+                    this.sharingLoading = true;
+                    try {
+                        const response = await fetch(`${this.API}/sharing/invitations`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ username })
+                        });
+                        if (!response.ok) {
+                            this.showToast(await this.getApiErrorMessage(response, 'Nie udalo sie wyslac zaproszenia.'));
+                            return;
+                        }
+                        this.sharingInviteUsername = '';
+                        await this.loadSharingConnections();
+                        this.showToast('Zaproszenie wyslane. Udostepnianie ruszy po akceptacji.', 'success');
+                    } finally {
+                        this.sharingLoading = false;
+                    }
+                },
+
+                async respondToSharingInvitation(invitationId, accept) {
+                    if (this.sharingLoading) return;
+                    this.sharingLoading = true;
+                    try {
+                        const action = accept ? 'accept' : 'decline';
+                        const response = await fetch(`${this.API}/sharing/invitations/${invitationId}/${action}`, { method: 'POST' });
+                        if (!response.ok) {
+                            this.showToast(await this.getApiErrorMessage(response, 'Nie udalo sie odpowiedziec na zaproszenie.'));
+                            return;
+                        }
+                        await this.loadSharingConnections();
+                        this.showToast(accept ? 'Zaproszenie zaakceptowane.' : 'Zaproszenie odrzucone.', 'success');
+                    } finally {
+                        this.sharingLoading = false;
+                    }
+                },
+
+                async removeSharingConnection(connection) {
+                    if (!connection) return;
+                    const confirmed = await this.askConfirmation(
+                        `Usunac ${connection.username} z listy? Istniejace wspolne zadania przestana byc udostepnione.`,
+                        'Usun polaczenie'
+                    );
+                    if (!confirmed) return;
+                    const response = await fetch(`${this.API}/sharing/connections/${connection.user_id}`, { method: 'DELETE' });
+                    if (!response.ok) {
+                        this.showToast(await this.getApiErrorMessage(response, 'Nie udalo sie usunac polaczenia.'));
+                        return;
+                    }
+                    await Promise.all([this.loadSharingConnections(), this.loadAllTasks(), this.loadModules()]);
+                    this.showToast('Polaczenie i dostep do wspolnych zadan zostaly usuniete.', 'success');
                 },
 
                 normalizeBrainDumpNote(note) {
@@ -2629,7 +2730,7 @@
                 },
 
                 statusRank(status) {
-                    return { todo: 0, przygotowanie: 1, oczekujace: 3, gotowe: 9 }[this.normalizeTaskStatus(status)] ?? 8;
+                    return { todo: 0, przygotowanie: 1, oczekujace: 3, obserwacja: 4, gotowe: 9 }[this.normalizeTaskStatus(status)] ?? 8;
                 },
 
                 daysUntilDue(task) {
@@ -2640,16 +2741,19 @@
                 },
 
                 isTaskOverdue(task) {
+                    if (this.normalizeTaskStatus(task?.status) === 'gotowe') return false;
                     const dueAt = this.getTaskDueDateTime(task);
                     if (!dueAt) return false;
                     return Date.now() > dueAt.getTime();
                 },
 
                 isTaskDueToday(task) {
+                    if (this.normalizeTaskStatus(task?.status) === 'gotowe') return false;
                     return this.daysUntilDue(task) === 0;
                 },
 
                 isTaskUpcoming(task) {
+                    if (this.normalizeTaskStatus(task?.status) === 'gotowe') return false;
                     const days = this.daysUntilDue(task);
                     return days !== null && days > 0 && days <= 7;
                 },
@@ -2801,6 +2905,7 @@
                         oczekujace: 'oczekuje',
                         przygotowanie: 'przygotowanie',
                         todo: 'w toku',
+                        obserwacja: 'do obserwacji',
                         gotowe: 'gotowe'
                     }[this.normalizeTaskStatus(status)] || status;
                 },
@@ -2854,6 +2959,7 @@
                 },
 
                 getTaskUrgencyLabel(task) {
+                    if (this.normalizeTaskStatus(task?.status) === 'gotowe') return '';
                     const days = this.daysUntilDue(task);
                     if (days === null) return this.hasPriority(task) ? 'priorytet' : '';
                     if (this.isTaskOverdue(task)) {
@@ -3302,6 +3408,7 @@
                 getModuleVisibleCount(moduleId) {
                     return this.tasks.filter(task => (
                         task.module_id === moduleId &&
+                        task.status !== 'gotowe' &&
                         this.taskMatchesPriority(task) &&
                         this.taskMatchesFocusFilter(task)
                     )).length;
@@ -3403,6 +3510,46 @@
                     });
                 },
 
+                async setTaskDueTime(task, rawTime, targetDate = '') {
+                    if (!task) return false;
+                    const dueTime = this.sanitizeDueTime(rawTime, '');
+                    const dueDate = this.sanitizeDateKey(targetDate) || this.sanitizeDateKey(task.due_date);
+                    if (!dueDate || !dueTime) {
+                        this.showToast('Wybierz poprawna godzine.');
+                        return false;
+                    }
+
+                    const send = (allowOverflow = false) => fetch(`${this.API}/tasks/${task.id}`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            due_date: dueDate,
+                            due_time: dueTime,
+                            allow_time_overflow: !!allowOverflow
+                        })
+                    });
+
+                    let response = await send(false);
+                    if (response.status === 409) {
+                        let message = 'Dodanie zadania o tej godzinie przekroczy limit 8h.';
+                        try {
+                            const payload = await response.json();
+                            message = payload?.detail?.message || message;
+                        } catch (error) {
+                            /* keep fallback */
+                        }
+                        if (!await this.askConfirmation(message, 'Zaplanuj mimo to')) return false;
+                        response = await send(true);
+                    }
+                    if (!response.ok) {
+                        this.showToast(await this.getApiErrorMessage(response, 'Nie udalo sie ustawic godziny zadania.'));
+                        return false;
+                    }
+                    await this.loadAllTasks();
+                    this.showToast(`Zadanie zaplanowane na ${dueTime}.`, 'success');
+                    return true;
+                },
+
                 async changeTaskStatus(task, nextStatus) {
                     if (!task) return;
                     const payload = { status: nextStatus };
@@ -3476,16 +3623,63 @@
                         return false;
                     }
 
-                    const username = prompt('Podaj nazwe uzytkownika, z ktorym chcesz dzielic to zadanie:');
-                    if (username === null) return false;
-                    const cleanUsername = username.trim();
-                    if (!cleanUsername) return false;
+                    await this.loadSharingConnections();
+                    if (this.sharingConnections.length === 0) {
+                        this.showToast('Najpierw dodaj osobe w Ustawienia → Udostepnianie. Zaproszenie musi zostac zaakceptowane.');
+                        this.taskModal = false;
+                        this.navigateUtilityView('sharing');
+                        return false;
+                    }
+
+                    this.sharingTaskId = id;
+                    this.shareTaskDueTime = this.getTaskDueTime(task);
+                    this.shareTaskModal = true;
+                    return true;
+                },
+
+                closeShareTaskModal() {
+                    this.shareTaskModal = false;
+                    this.sharingTaskId = null;
+                    this.shareTaskDueTime = '';
+                },
+
+                isTaskSharedWith(task, connection) {
+                    const ids = Array.isArray(task?.shared_user_ids) ? task.shared_user_ids.map(Number) : [];
+                    return ids.includes(Number(connection?.user_id));
+                },
+
+                getSharingTask() {
+                    const id = Number(this.sharingTaskId);
+                    return this.getTaskById(id) || (Number(this.editingTask?.id) === id ? this.editingTask : null);
+                },
+
+                async shareTaskWithConnection(connection) {
+                    const task = this.getSharingTask();
+                    if (!task || !connection || this.isTaskSharedWith(task, connection)) return false;
 
                     try {
-                        const response = await fetch(`${this.API}/tasks/${id}/share`, {
+                        const dueDate = this.sanitizeDateKey(task.due_date);
+                        const selectedTime = this.sanitizeDueTime(this.shareTaskDueTime, '');
+                        if (dueDate && !selectedTime) {
+                            this.showToast('Wybierz godzine. Dzieki temu zadanie trafi na os czasu obu osob.');
+                            return false;
+                        }
+                        if (dueDate && selectedTime !== this.getTaskDueTime(task)) {
+                            const timeResponse = await fetch(`${this.API}/tasks/${task.id}`, {
+                                method: 'PUT',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ due_date: dueDate, due_time: selectedTime })
+                            });
+                            if (!timeResponse.ok) {
+                                this.showToast(await this.getApiErrorMessage(timeResponse, 'Nie udalo sie zapisac godziny zadania.'));
+                                return false;
+                            }
+                        }
+
+                        const response = await fetch(`${this.API}/tasks/${task.id}/share`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ username: cleanUsername })
+                            body: JSON.stringify({ user_id: Number(connection.user_id) })
                         });
 
                         if (!response.ok) {
@@ -3493,11 +3687,14 @@
                             return false;
                         }
 
+                        const taskId = Number(task.id);
                         await this.init();
-                        const refreshedTask = this.getTaskById(id);
-                        if (this.taskModal && Number(this.editingTask?.id) === id && refreshedTask) {
+                        const refreshedTask = this.getTaskById(taskId);
+                        if (this.taskModal && Number(this.editingTask?.id) === taskId && refreshedTask) {
                             this.openTaskModal(refreshedTask);
                         }
+                        this.closeShareTaskModal();
+                        this.showToast(`Zadanie udostepnione: ${connection.username}.`, 'success');
                         return true;
                     } catch (error) {
                         this.showToast('Nie udalo sie udostepnic zadania. Sprawdz polaczenie z backendem.');
@@ -3525,7 +3722,7 @@
                 },
 
                 async quickMove(task, direction) {
-                    const columns = this.columnsMeta.map(column => column.id);
+                    const columns = [...this.columnsMeta.map(column => column.id), 'gotowe'];
                     const nextIndex = columns.indexOf(task.status) + direction;
                     if (nextIndex < 0 || nextIndex >= columns.length) return;
                     await this.changeTaskStatus(task, columns[nextIndex]);
@@ -3692,6 +3889,11 @@
                 handleKeydown(event) {
                     const targetTag = event?.target?.tagName?.toLowerCase();
                     const isTypingField = ['input', 'textarea', 'select'].includes(targetTag) || event?.target?.isContentEditable;
+                    if (event.key === 'Escape' && this.shareTaskModal) {
+                        event.preventDefault();
+                        this.closeShareTaskModal();
+                        return;
+                    }
                     if (event.key === 'Escape' && (this.settingsMenuOpen || this.fabOpen)) {
                         event.preventDefault();
                         this.closeOverlayMenus();
@@ -3803,6 +4005,13 @@
                         subtasks: normalizedSubtasks
                     };
                     this.taskModal = true;
+                },
+
+                handleEditingTaskStatusChange() {
+                    if (this.normalizeTaskStatus(this.editingTask?.status) !== 'obserwacja') return;
+                    this.editingTask.due_date = '';
+                    this.editingTask.due_time = '';
+                    this.editingTask.reminder_offset_minutes = -1;
                 },
 
                 addEditingSubtask() {

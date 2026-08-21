@@ -6,7 +6,7 @@ STATUS_ALIASES = {
     "analiza": "przygotowanie",
     "wstepne": "przygotowanie",
 }
-ALLOWED_STATUSES = {"oczekujace", "przygotowanie", "todo", "gotowe"}
+ALLOWED_STATUSES = {"oczekujace", "przygotowanie", "todo", "obserwacja", "gotowe"}
 
 
 def normalize_module_category(raw: Optional[str]) -> str:
