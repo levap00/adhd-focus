@@ -7,11 +7,21 @@ class RegisterPayload(BaseModel):
     username: str = Field(..., min_length=3, max_length=64, pattern=r"^[a-zA-Z0-9_.-]+$")
     password: str = Field(..., min_length=8, max_length=72)
     invite_code: str = Field(..., min_length=1, max_length=128)
+    email: str = Field(..., min_length=5, max_length=254)
 
 
 class RegisterResponse(BaseModel):
     id: int
     username: str
+    email: str = ""
+
+
+class EmailStartPayload(BaseModel):
+    email: str = Field(..., min_length=5, max_length=254)
+
+
+class EmailConfirmPayload(BaseModel):
+    code: str = Field(..., min_length=4, max_length=12)
 
 
 class ModuleCreate(BaseModel):

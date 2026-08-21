@@ -67,9 +67,62 @@ def _init_db() -> None:
                 username TEXT NOT NULL UNIQUE,
                 hashed_password TEXT NOT NULL,
                 created_at TEXT NOT NULL DEFAULT '',
-                updated_at TEXT NOT NULL DEFAULT ''
+                updated_at TEXT NOT NULL DEFAULT '',
+                email TEXT NOT NULL DEFAULT '',
+                email_verified_at TEXT NOT NULL DEFAULT ''
             )
             """
+        )
+
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_unique
+            ON users(email) WHERE email != ''
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS login_challenges (
+                id TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                purpose TEXT NOT NULL DEFAULT 'login_device',
+                email TEXT NOT NULL DEFAULT '',
+                code_hash TEXT NOT NULL DEFAULT '',
+                remember INTEGER NOT NULL DEFAULT 0,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                max_attempts INTEGER NOT NULL DEFAULT 5,
+                ip_address TEXT NOT NULL DEFAULT '',
+                user_agent TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT '',
+                expires_at TEXT NOT NULL DEFAULT '',
+                consumed_at TEXT NOT NULL DEFAULT '',
+                last_sent_at TEXT NOT NULL DEFAULT '',
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_login_challenges_user ON login_challenges(user_id, purpose, consumed_at)"
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS trusted_devices (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                token_hash TEXT NOT NULL UNIQUE,
+                label TEXT NOT NULL DEFAULT '',
+                user_agent TEXT NOT NULL DEFAULT '',
+                ip_address TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT '',
+                last_seen_at TEXT NOT NULL DEFAULT '',
+                expires_at TEXT NOT NULL DEFAULT '',
+                revoked_at TEXT NOT NULL DEFAULT '',
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_trusted_devices_user ON trusted_devices(user_id, revoked_at, last_seen_at)"
         )
 
         conn.execute(
@@ -419,6 +472,8 @@ def _init_db() -> None:
             """
         )
 
+        _ensure_column(conn, "users", "email", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "users", "email_verified_at", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "modules", "category", "TEXT DEFAULT 'praca'")
         _ensure_column(conn, "modules", "owner_user_id", "INTEGER")
         _ensure_column(conn, "brain_dump_notes", "title", "TEXT NOT NULL DEFAULT ''")

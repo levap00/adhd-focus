@@ -14,6 +14,8 @@ load_dotenv()
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _MAX_ADDITIONAL_ACCOUNTS = 8
 _USERNAME_PATTERN = re.compile(r"^[a-zA-Z0-9_.-]{3,64}$")
+_EMAIL_PATTERN = re.compile(r"^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$")
+_USER_COLUMNS = "id, username, hashed_password, email, email_verified_at"
 
 
 @dataclass(frozen=True)
@@ -21,6 +23,12 @@ class AccountConfig:
     username: str
     id: int = 0
     hashed_password: str = ""
+    email: str = ""
+    email_verified_at: str = ""
+
+    @property
+    def email_verified(self) -> bool:
+        return bool(self.email and self.email_verified_at)
 
 
 class AccountRegistrationError(Exception):
@@ -31,7 +39,15 @@ class UsernameAlreadyExists(AccountRegistrationError):
     pass
 
 
+class EmailAlreadyExists(AccountRegistrationError):
+    pass
+
+
 class InvalidInviteCode(AccountRegistrationError):
+    pass
+
+
+class InvalidEmail(AccountRegistrationError):
     pass
 
 
@@ -64,6 +80,10 @@ def _normalize_username(username: str) -> str:
     return (username or "").strip()
 
 
+def normalize_email(email: str | None) -> str:
+    return (email or "").strip().lower()
+
+
 def _validate_username(username: str) -> str:
     normalized = _normalize_username(username)
     if not _USERNAME_PATTERN.match(normalized):
@@ -71,29 +91,42 @@ def _validate_username(username: str) -> str:
     return normalized
 
 
-def _build_primary_env_account() -> tuple[str, str]:
+def validate_email(email: str | None, required: bool = True) -> str:
+    normalized = normalize_email(email)
+    if not normalized:
+        if required:
+            raise InvalidEmail("Email is required.")
+        return ""
+    if len(normalized) > 254 or not _EMAIL_PATTERN.match(normalized):
+        raise InvalidEmail("Email is invalid.")
+    return normalized
+
+
+def _build_primary_env_account() -> tuple[str, str, str]:
     username = (os.getenv("FOCUS_USERNAME", "admin") or "admin").strip() or "admin"
     password = os.getenv("FOCUS_PASSWORD", "admin")
-    return username, password
+    email = normalize_email(os.getenv("FOCUS_EMAIL", ""))
+    return username, password, email
 
 
-def _build_additional_env_account(index: int) -> tuple[str, str] | None:
+def _build_additional_env_account(index: int) -> tuple[str, str, str] | None:
     username = (os.getenv(f"FOCUS_USERNAME_{index}", "") or "").strip()
     password = os.getenv(f"FOCUS_PASSWORD_{index}", "")
     if not username or not password:
         return None
-    return username, password
+    email = normalize_email(os.getenv(f"FOCUS_EMAIL_{index}", ""))
+    return username, password, email
 
 
-def _load_env_accounts() -> list[tuple[str, str]]:
-    accounts: list[tuple[str, str]] = [_build_primary_env_account()]
+def _load_env_accounts() -> list[tuple[str, str, str]]:
+    accounts: list[tuple[str, str, str]] = [_build_primary_env_account()]
     for index in range(2, 2 + _MAX_ADDITIONAL_ACCOUNTS):
         account = _build_additional_env_account(index)
         if account:
             accounts.append(account)
 
     usernames_seen: set[str] = set()
-    for username, _password in accounts:
+    for username, _password, _email in accounts:
         if username in usernames_seen:
             raise RuntimeError(f"Duplicate username in .env: {username}")
         usernames_seen.add(username)
@@ -111,6 +144,12 @@ def _configured_invite_codes() -> list[str]:
     return codes
 
 
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
+    columns = [row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()]
+    if column not in columns:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+
+
 def _create_accounts_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
@@ -119,8 +158,18 @@ def _create_accounts_schema(conn: sqlite3.Connection) -> None:
             username TEXT NOT NULL UNIQUE,
             hashed_password TEXT NOT NULL,
             created_at TEXT NOT NULL DEFAULT '',
-            updated_at TEXT NOT NULL DEFAULT ''
+            updated_at TEXT NOT NULL DEFAULT '',
+            email TEXT NOT NULL DEFAULT '',
+            email_verified_at TEXT NOT NULL DEFAULT ''
         )
+        """
+    )
+    _ensure_column(conn, "users", "email", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "users", "email_verified_at", "TEXT NOT NULL DEFAULT ''")
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_unique
+        ON users(email) WHERE email != ''
         """
     )
     conn.execute(
@@ -138,20 +187,21 @@ def _create_accounts_schema(conn: sqlite3.Connection) -> None:
 
 def _seed_env_accounts(conn: sqlite3.Connection) -> None:
     now = _utc_now_iso()
-    for username, password in _load_env_accounts():
+    for username, password, email in _load_env_accounts():
         existing_user = conn.execute(
-            "SELECT 1 FROM users WHERE username = ?",
+            f"SELECT {_USER_COLUMNS} FROM users WHERE username = ?",
             (username,),
         ).fetchone()
         if existing_user:
             continue
 
+        verified_at = now if email else ""
         conn.execute(
             """
-            INSERT INTO users (username, hashed_password, created_at, updated_at)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO users (username, hashed_password, created_at, updated_at, email, email_verified_at)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (username, get_password_hash(password), now, now),
+            (username, get_password_hash(password), now, now, email, verified_at),
         )
 
 
@@ -182,10 +232,13 @@ def init_accounts_store() -> None:
 
 
 def _row_to_account(row: sqlite3.Row) -> AccountConfig:
+    keys = row.keys()
     return AccountConfig(
         id=int(row["id"]),
         username=row["username"],
         hashed_password=row["hashed_password"],
+        email=row["email"] if "email" in keys else "",
+        email_verified_at=row["email_verified_at"] if "email_verified_at" in keys else "",
     )
 
 
@@ -193,8 +246,8 @@ def load_accounts() -> list[AccountConfig]:
     init_accounts_store()
     with _connect_database() as conn:
         rows = conn.execute(
-            """
-            SELECT id, username, hashed_password
+            f"""
+            SELECT {_USER_COLUMNS}
             FROM users
             ORDER BY id
             """
@@ -217,11 +270,34 @@ def get_user_by_username(username: str | None) -> AccountConfig | None:
     init_accounts_store()
     with _connect_database() as conn:
         row = conn.execute(
-            """
-            SELECT id, username, hashed_password
+            f"""
+            SELECT {_USER_COLUMNS}
             FROM users
             WHERE username = ?
             """,
+            (normalized,),
+        ).fetchone()
+    return _row_to_account(row) if row else None
+
+
+def get_user_by_id(user_id: int) -> AccountConfig | None:
+    init_accounts_store()
+    with _connect_database() as conn:
+        row = conn.execute(
+            f"SELECT {_USER_COLUMNS} FROM users WHERE id = ?",
+            (user_id,),
+        ).fetchone()
+    return _row_to_account(row) if row else None
+
+
+def get_user_by_email(email: str | None) -> AccountConfig | None:
+    normalized = normalize_email(email)
+    if not normalized:
+        return None
+    init_accounts_store()
+    with _connect_database() as conn:
+        row = conn.execute(
+            f"SELECT {_USER_COLUMNS} FROM users WHERE email = ?",
             (normalized,),
         ).fetchone()
     return _row_to_account(row) if row else None
@@ -231,9 +307,74 @@ def user_exists(username: str | None) -> bool:
     return get_user_by_username(username) is not None
 
 
-def register_user(username: str, password: str, invite_code: str) -> AccountConfig:
+def set_user_email(user_id: int, email: str, verified: bool = False) -> AccountConfig:
+    normalized = validate_email(email, required=True)
+    now = _utc_now_iso()
+    init_accounts_store()
+    with _connect_database() as conn:
+        taken = conn.execute(
+            "SELECT id FROM users WHERE email = ? AND id != ?",
+            (normalized, user_id),
+        ).fetchone()
+        if taken:
+            raise EmailAlreadyExists("Ten adres e-mail jest juz uzywany.")
+        conn.execute(
+            """
+            UPDATE users
+            SET email = ?, email_verified_at = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (normalized, now if verified else "", now, user_id),
+        )
+        conn.commit()
+        row = conn.execute(f"SELECT {_USER_COLUMNS} FROM users WHERE id = ?", (user_id,)).fetchone()
+    refresh_accounts_cache()
+    if not row:
+        raise ValueError("User not found.")
+    return _row_to_account(row)
+
+
+def mark_email_verified(user_id: int, email: str | None = None) -> AccountConfig:
+    now = _utc_now_iso()
+    init_accounts_store()
+    with _connect_database() as conn:
+        if email:
+            normalized = validate_email(email, required=True)
+            taken = conn.execute(
+                "SELECT id FROM users WHERE email = ? AND id != ?",
+                (normalized, user_id),
+            ).fetchone()
+            if taken:
+                raise EmailAlreadyExists("Ten adres e-mail jest juz uzywany.")
+            conn.execute(
+                """
+                UPDATE users
+                SET email = ?, email_verified_at = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (normalized, now, now, user_id),
+            )
+        else:
+            conn.execute(
+                """
+                UPDATE users
+                SET email_verified_at = ?, updated_at = ?
+                WHERE id = ? AND email != ''
+                """,
+                (now, now, user_id),
+            )
+        conn.commit()
+        row = conn.execute(f"SELECT {_USER_COLUMNS} FROM users WHERE id = ?", (user_id,)).fetchone()
+    refresh_accounts_cache()
+    if not row:
+        raise ValueError("User not found.")
+    return _row_to_account(row)
+
+
+def register_user(username: str, password: str, invite_code: str, email: str = "") -> AccountConfig:
     normalized_username = _validate_username(username)
     normalized_code = (invite_code or "").strip()
+    normalized_email = validate_email(email, required=True)
     if not normalized_code:
         raise InvalidInviteCode("Invite code is required.")
 
@@ -247,6 +388,13 @@ def register_user(username: str, password: str, invite_code: str) -> AccountConf
         ).fetchone()
         if existing_user:
             raise UsernameAlreadyExists("Username is already taken.")
+
+        existing_email = conn.execute(
+            "SELECT 1 FROM users WHERE email = ?",
+            (normalized_email,),
+        ).fetchone()
+        if existing_email:
+            raise EmailAlreadyExists("Email is already taken.")
 
         invite = conn.execute(
             """
@@ -262,10 +410,10 @@ def register_user(username: str, password: str, invite_code: str) -> AccountConf
         now = _utc_now_iso()
         cursor = conn.execute(
             """
-            INSERT INTO users (username, hashed_password, created_at, updated_at)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO users (username, hashed_password, created_at, updated_at, email, email_verified_at)
+            VALUES (?, ?, ?, ?, ?, '')
             """,
-            (normalized_username, get_password_hash(password), now, now),
+            (normalized_username, get_password_hash(password), now, now, normalized_email),
         )
         user_id = int(cursor.lastrowid)
         conn.execute(
@@ -283,6 +431,8 @@ def register_user(username: str, password: str, invite_code: str) -> AccountConf
         id=user_id,
         username=normalized_username,
         hashed_password="",
+        email=normalized_email,
+        email_verified_at="",
     )
 
 
