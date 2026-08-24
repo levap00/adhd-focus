@@ -47,6 +47,10 @@
                 viewportGuardsInstalled: false,
                 keyboardOpen: false,
                 fabOpen: false,
+                quickCaptureOpen: false,
+                quickCaptureText: '',
+                quickCaptureSaving: false,
+                taskDetailsOpen: false,
                 sidebarCollapsed: false,
                 focusFilter: 'all',
                 dopamineWeekOffset: 0,
@@ -525,15 +529,61 @@
                 closeOverlayMenus() {
                     this.settingsMenuOpen = false;
                     this.fabOpen = false;
+                    if (!this.quickCaptureSaving) this.quickCaptureOpen = false;
                 },
 
                 toggleFab() {
-                    this.settingsMenuOpen = false;
-                    this.fabOpen = !this.fabOpen;
+                    this.openQuickCapture();
                 },
 
                 closeFab() {
                     this.fabOpen = false;
+                },
+
+                openQuickCapture() {
+                    this.settingsMenuOpen = false;
+                    this.fabOpen = false;
+                    this.quickCaptureOpen = true;
+                    this.$nextTick(() => this.$refs?.quickCaptureInput?.focus());
+                },
+
+                closeQuickCapture() {
+                    if (this.quickCaptureSaving) return;
+                    this.quickCaptureOpen = false;
+                    this.quickCaptureText = '';
+                },
+
+                async submitQuickCapture() {
+                    const name = (this.quickCaptureText || '').trim();
+                    if (!name || this.quickCaptureSaving) return;
+                    this.quickCaptureSaving = true;
+                    try {
+                        const response = await fetch(`${this.API}/tasks`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ name, status: 'oczekujace' })
+                        });
+                        if (!response.ok) {
+                            this.showToast(await this.getApiErrorMessage(response, 'Nie udalo sie zapisac wrzutu.'));
+                            return;
+                        }
+                        this.quickCaptureText = '';
+                        await Promise.all([this.loadModules(), this.loadAllTasks()]);
+                        this.showToast('Zapisane. Jest w Do przypisania.', 'success');
+                        this.$nextTick(() => this.$refs?.quickCaptureInput?.focus());
+                    } catch (error) {
+                        this.showToast('Nie udalo sie zapisac wrzutu.');
+                    } finally {
+                        this.quickCaptureSaving = false;
+                    }
+                },
+
+                openDetailsFromQuickCapture() {
+                    const name = (this.quickCaptureText || '').trim();
+                    this.closeQuickCapture();
+                    this.openNewTaskModal();
+                    if (name) this.editingTask.name = name;
+                    this.taskDetailsOpen = true;
                 },
 
                 navigateMainView(target) {
@@ -582,8 +632,7 @@
                 },
 
                 openFabNewTask() {
-                    this.closeFab();
-                    this.openNewTaskModal();
+                    this.openQuickCapture();
                 },
 
                 openBrainDumpAction() {
@@ -672,6 +721,12 @@
                         return this.modules.filter(module => Number(module.id) === Number(currentModuleId));
                     }
                     return this.getAssignableModules();
+                },
+
+                getDetailModuleOptions(task = null) {
+                    return this.getTaskModuleOptions(task).filter(module => (
+                        (module.name || '').trim().toLowerCase() !== 'do przypisania'
+                    ));
                 },
 
                 getModulesByCategory(category) {
@@ -4045,6 +4100,17 @@
                         this.closeShareTaskModal();
                         return;
                     }
+                    if (event.key === 'Escape' && this.quickCaptureOpen) {
+                        event.preventDefault();
+                        this.closeQuickCapture();
+                        return;
+                    }
+                    if (event.key === 'Escape' && this.taskModal) {
+                        event.preventDefault();
+                        this.taskModal = false;
+                        this.isCreatingTask = false;
+                        return;
+                    }
                     if (event.key === 'Escape' && (this.settingsMenuOpen || this.fabOpen)) {
                         event.preventDefault();
                         this.closeOverlayMenus();
@@ -4087,11 +4153,13 @@
                 openNewTaskModal(preferredModuleId = null) {
                     this.isCreatingTask = true;
                     this.taskFormError = '';
+                    this.taskDetailsOpen = false;
                     const assignableModules = this.getAssignableModules();
                     const preferredId = this.normalizeOptionalId(preferredModuleId);
                     const preferredModule = assignableModules.find(module => Number(module.id) === Number(preferredId));
                     const activeModule = assignableModules.find(module => Number(module.id) === Number(this.activeModule?.id));
-                    const defaultModule = preferredModule || activeModule || assignableModules[0] || null;
+                    const inboxModule = this.getInboxModule();
+                    const defaultModule = preferredModule || (this.taskScope === 'module' ? activeModule : null) || inboxModule || null;
                     this.editingTask = {
                         id: null,
                         name: '',
@@ -4112,6 +4180,7 @@
                 openTaskModal(task) {
                     this.isCreatingTask = false;
                     this.taskFormError = '';
+                    this.taskDetailsOpen = true;
                     const baseSubtasks = this.normalizeSubtasks(task?.subtasks);
                     const needsLegacySubtaskDefaults = baseSubtasks.length > 0 && (
                         !this.hasConfiguredSubtaskTimes(baseSubtasks) || !this.hasConfiguredSubtaskPoints(baseSubtasks)
@@ -4168,6 +4237,59 @@
                 addEditingSubtask() {
                     const current = Array.isArray(this.editingTask?.subtasks) ? this.editingTask.subtasks : [];
                     this.editingTask.subtasks = [...current, this.createSubtaskDraft('')];
+                    this.$nextTick(() => {
+                        const fields = document.querySelectorAll('.subtask-row-title');
+                        const last = fields[fields.length - 1];
+                        if (last) last.focus();
+                    });
+                },
+
+                handleSubtaskEnter(index) {
+                    const current = Array.isArray(this.editingTask?.subtasks) ? this.editingTask.subtasks : [];
+                    if (index >= current.length - 1) {
+                        this.addEditingSubtask();
+                    }
+                },
+
+                async toggleCardSubtask(task, subtask, checked) {
+                    if (!task || !subtask) return;
+                    const nextSubtasks = this.normalizeSubtasks(task.subtasks).map(item => {
+                        const isMatch = (item.id && subtask.id && Number(item.id) === Number(subtask.id))
+                            || item.title === subtask.title;
+                        if (!isMatch) return item;
+                        return {
+                            ...item,
+                            done: !!checked,
+                            done_at: checked ? new Date().toISOString() : ''
+                        };
+                    });
+                    task.subtasks = nextSubtasks;
+                    try {
+                        const payload = this.pickTaskPayload({ ...task, subtasks: nextSubtasks });
+                        await this.patchTask(task.id, payload);
+                        await this.loadAllTasks();
+                    } catch (error) {
+                        this.showToast('Nie udalo sie odhaczyc podzadania.');
+                        await this.loadAllTasks();
+                    }
+                },
+
+                getInboxModule() {
+                    return this.modules.find(module => (module.name || '').trim().toLowerCase() === 'do przypisania') || null;
+                },
+
+                getInboxTasks(limit = 8) {
+                    const inbox = this.getInboxModule();
+                    if (!inbox) return [];
+                    const items = this.tasks.filter(task => (
+                        Number(task.module_id) === Number(inbox.id) &&
+                        this.normalizeTaskStatus(task.status) !== 'gotowe'
+                    ));
+                    return items.slice(0, limit);
+                },
+
+                getVisibleCardSubtasks(task, limit = 4) {
+                    return this.normalizeSubtasks(task?.subtasks).slice(0, limit);
                 },
 
                 removeEditingSubtask(index) {
@@ -4195,28 +4317,8 @@
                         this.editingTask.points_weight = this.normalizePointsWeight(this.editingTask.points_weight);
                         this.editingTask.subtasks = this.normalizeSubtasks(this.editingTask.subtasks);
                         const payload = this.pickTaskPayload(this.editingTask);
-                        if (!payload.module_id) {
-                            this.taskFormError = this.getAssignableModules().length > 0
-                                ? 'Wybierz modul. Dzieki temu zadanie nie zniknie po ukonczeniu.'
-                                : 'Najpierw utworz modul, a potem zapisz zadanie.';
-                            this.$nextTick(() => this.$refs?.taskModuleInput?.focus());
-                            return;
-                        }
                         const subtasks = this.normalizeSubtasks(payload.subtasks);
                         if (subtasks.length > 0) {
-                            for (let index = 0; index < subtasks.length; index++) {
-                                const subtask = subtasks[index];
-                                const subtaskMinutes = this.normalizeSubtaskEstimatedMinutes(subtask.estimated_time);
-                                const subtaskPoints = this.normalizeSubtaskPointsWeight(subtask.points_weight);
-                                if (subtaskMinutes <= 0) {
-                                    this.showToast(`Podzadanie #${index + 1} musi miec czas wiekszy od 0 minut.`);
-                                    return;
-                                }
-                                if (subtaskPoints <= 0) {
-                                    this.showToast(`Podzadanie #${index + 1} musi miec punkty wieksze od 0.`);
-                                    return;
-                                }
-                            }
                             payload.estimated_time = this.getSubtasksTimeSum(subtasks);
                             payload.points_weight = this.getSubtasksPointsSum(subtasks);
                             payload.subtasks = subtasks;
@@ -4228,15 +4330,17 @@
                             return;
                         }
 
+                        if (!payload.module_id) {
+                            payload.module_id = null;
+                        }
+
                         if (payload.estimated_time <= 0) {
-                            this.showToast('Podaj szacowany czas zadania (minuty, wiecej niz 0).');
-                            return;
+                            payload.estimated_time = 15;
                         }
 
                         payload.points_weight = this.normalizePointsWeight(payload.points_weight);
                         if (payload.points_weight <= 0) {
-                            this.showToast('Waga zadania musi byc wieksza od 0.');
-                            return;
+                            payload.points_weight = 1;
                         }
 
                         if (payload.status === 'gotowe') {

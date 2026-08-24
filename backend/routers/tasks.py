@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from backend.accounts import AccountConfig, get_user_by_username
 from backend.auth import get_request_user
-from backend.db import get_db
+from backend.db import ensure_inbox_module, get_db
 from backend.schemas import TaskCreate, TaskMergePayload, TaskSharePayload, TaskUpdate
 from backend.utils import (
     normalize_due_date,
@@ -172,6 +172,10 @@ def _normalize_subtasks(raw_subtasks: Any) -> list[dict]:
             continue
         if len(title) > MAX_SUBTASK_TITLE:
             title = title[:MAX_SUBTASK_TITLE].rstrip()
+        if estimated_time <= 0:
+            estimated_time = 15
+        if points_weight <= 0:
+            points_weight = 1.0
 
         normalized_id = None
         if isinstance(item_id, int) and not isinstance(item_id, bool):
@@ -1484,8 +1488,6 @@ def add_task(payload: TaskCreate):
         clean_due_date = ""
         clean_due_time = ""
     clean_module_id = _normalize_optional_int(payload.module_id)
-    if clean_module_id is None:
-        raise HTTPException(status_code=400, detail="Wybierz modul dla zadania.")
     clean_reminder_offset_minutes = _normalize_reminder_offset_minutes(payload.reminder_offset_minutes)
     safe_estimated_time = parse_non_negative_int(payload.estimated_time)
     safe_points_weight = _normalize_points_weight(payload.points_weight)
@@ -1495,16 +1497,21 @@ def add_task(payload: TaskCreate):
         subtasks_totals = _calculate_subtasks_totals(clean_subtasks)
         safe_estimated_time = parse_non_negative_int(subtasks_totals["estimated_time"], default=0)
         safe_points_weight = _normalize_points_weight(subtasks_totals["points_weight"])
-    elif safe_estimated_time <= 0:
-        raise HTTPException(status_code=400, detail="Podaj szacowany czas zadania (minuty, wiecej niz 0).")
+    if safe_estimated_time <= 0:
+        safe_estimated_time = 15
+    if safe_points_weight <= 0:
+        safe_points_weight = 1.0
 
     with get_db() as conn:
-        module_exists = conn.execute(
-            "SELECT 1 FROM modules WHERE id = ? AND owner_user_id = ?",
-            (clean_module_id, current_account.id),
-        ).fetchone()
-        if not module_exists:
-            raise HTTPException(status_code=404, detail="Modul nie znaleziony")
+        if clean_module_id is None:
+            clean_module_id = ensure_inbox_module(conn, current_account.id)
+        else:
+            module_exists = conn.execute(
+                "SELECT 1 FROM modules WHERE id = ? AND owner_user_id = ?",
+                (clean_module_id, current_account.id),
+            ).fetchone()
+            if not module_exists:
+                raise HTTPException(status_code=404, detail="Modul nie znaleziony")
 
         limit_date = _task_limit_date(clean_due_date, clean_status, clean_description)
         planned_before = _get_daily_planned_minutes(conn, current_account, limit_date)
@@ -1615,7 +1622,8 @@ def update_task(task_id: int, task_data: TaskUpdate):
 
         next_module_id = _normalize_optional_int(update_data.get("module_id", existing_task.get("module_id")))
         if next_module_id is None:
-            raise HTTPException(status_code=400, detail="Wybierz modul dla zadania.")
+            next_module_id = ensure_inbox_module(conn, int(existing_task.get("owner_user_id") or 0))
+            update_data["module_id"] = next_module_id
         module_exists = conn.execute(
             "SELECT 1 FROM modules WHERE id = ? AND owner_user_id = ?",
             (next_module_id, int(existing_task.get("owner_user_id") or 0)),
