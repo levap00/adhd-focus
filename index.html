@@ -7,7 +7,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/app.css?v=20260824-1">
+    <link rel="stylesheet" href="/static/app.css?v=20260824-2">
     <meta name="apple-mobile-web-app-capable" content="yes">
 
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
@@ -18,7 +18,7 @@
 
     <link rel="manifest" href="/static/manifest.json">
     <script src="https://cdn.tailwindcss.com"></script>
-    <script defer src="/static/app.js?v=20260824-1"></script>
+    <script defer src="/static/app.js?v=20260824-2"></script>
     <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
 </head>
 <body x-data="app()" x-init="init()" @keydown.window="handleKeydown($event)" @resize.window="handleViewportResize()" @pointermove.window="moveCanvasDrag($event)" @pointerup.window="endCanvasDrag()" :class="[theme === 'dark' ? 'theme-dark' : 'theme-light', (taskModal || shareTaskModal || monthlyTaskModal || debtModal || quickCaptureOpen) ? 'modal-open' : '', keyboardOpen ? 'keyboard-open' : '']">
@@ -1127,27 +1127,51 @@
                             <div class="flex flex-wrap items-center justify-between gap-4">
                                 <div>
                                     <p class="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400">Mapa</p>
-                                    <h2 class="mt-1 text-2xl font-black tracking-tight text-slate-900 md:text-3xl">Tablica robocza</h2>
-                                    <p class="mt-2 text-xs text-slate-500">Prosta przestrzen jak mini canva: tekst, ksztalty, kolory i strzalki miedzy elementami.</p>
+                                    <h2 class="mt-1 text-2xl font-black tracking-tight text-slate-900 md:text-3xl">Tablice zadan</h2>
+                                    <p class="mt-2 text-xs text-slate-500">Ukladzasz klocki i strzalki. Status zostaje w kanbanie — przesuniecie na mapie go nie zmienia.</p>
                                 </div>
                                 <div class="flex flex-wrap items-center gap-2">
-                                    <template x-for="shape in canvasShapeOptions" :key="shape.id">
-                                        <button @click="addCanvasNode(shape.id)" class="inline-flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-600 transition-colors hover:bg-slate-50">
-                                            <span class="text-sm font-black text-slate-900" x-text="getCanvasShapeSymbol(shape.id)"></span>
-                                            <span x-text="shape.label"></span>
-                                        </button>
+                                    <template x-for="board in canvasBoards" :key="board.id">
+                                        <button @click="switchCanvasBoard(board.id)" type="button" :class="activeCanvasBoardId === board.id ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-600 border-slate-200'" class="rounded-2xl border px-3 py-2 text-sm font-bold transition-colors" x-text="board.name"></button>
                                     </template>
+                                    <button @click="addCanvasBoard()" type="button" class="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-600 transition-colors hover:bg-slate-50">+ Tablica</button>
+                                    <button @click="renameActiveCanvasBoard()" type="button" class="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-500">Zmien nazwe</button>
                                 </div>
                             </div>
 
                             <div class="mt-4 flex flex-wrap items-center gap-2">
+                                <button @click="addCanvasColumn()" type="button" class="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-800 transition-colors hover:bg-emerald-100">+ Kolumna</button>
+                                <div class="relative">
+                                    <button @click="canvasTaskPickerOpen = !canvasTaskPickerOpen" type="button" class="rounded-xl border border-cyan-200 bg-cyan-50 px-3 py-2 text-xs font-bold text-cyan-800 transition-colors hover:bg-cyan-100">+ Zadanie</button>
+                                    <div x-show="canvasTaskPickerOpen" x-cloak @click.outside="canvasTaskPickerOpen = false" class="canvas-task-picker">
+                                        <input x-model="canvasTaskQuery" @keydown.enter.prevent="createTaskOnCanvas()" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold outline-none focus:border-cyan-300" placeholder="Szukaj albo wpisz nowe..." />
+                                        <button @click="createTaskOnCanvas()" type="button" class="mt-2 w-full rounded-xl bg-slate-900 px-3 py-2 text-xs font-black text-white">Dodaj jako nowe zadanie</button>
+                                        <div class="mt-2 max-h-56 space-y-1 overflow-y-auto">
+                                            <template x-for="task in getCanvasPinableTasks()" :key="'pin-' + task.id">
+                                                <button @click="pinTaskToCanvas(task)" type="button" class="flex w-full items-start justify-between gap-2 rounded-xl px-2 py-2 text-left hover:bg-slate-50">
+                                                    <span class="min-w-0 text-xs font-bold leading-5 text-slate-800" x-text="task.name"></span>
+                                                    <span class="shrink-0 text-[10px] font-bold text-slate-400" x-text="getModuleName(task.module_id)"></span>
+                                                </button>
+                                            </template>
+                                            <p x-show="getCanvasPinableTasks().length === 0" class="px-2 py-3 text-xs font-bold text-slate-400">Brak otwartych zadan do przypiecia.</p>
+                                        </div>
+                                    </div>
+                                </div>
+                                <button @click="addCanvasNode('text')" type="button" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600 transition-colors hover:bg-slate-50">Notatka</button>
+                                <template x-for="shape in getCanvasDrawShapes()" :key="shape.id">
+                                    <button @click="addCanvasNode(shape.id)" class="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600 transition-colors hover:bg-slate-50">
+                                        <span x-text="getCanvasShapeSymbol(shape.id)"></span>
+                                        <span x-text="shape.label"></span>
+                                    </button>
+                                </template>
                                 <button @click="canvasGridVisible = !canvasGridVisible; saveCanvasBoard()" :class="canvasGridVisible ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-600 border-slate-200'" class="rounded-xl border px-3 py-2 text-xs font-bold transition-colors">Siatka</button>
                                 <button @click="canvasSnapToGrid = !canvasSnapToGrid; saveCanvasBoard()" :class="canvasSnapToGrid ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-600 border-slate-200'" class="rounded-xl border px-3 py-2 text-xs font-bold transition-colors">Przyciaganie</button>
                                 <button @click="toggleCanvasLinkMode()" :class="canvasLinkDraftFromId ? 'bg-amber-500 text-white border-amber-500' : 'bg-white text-slate-600 border-slate-200'" class="rounded-xl border px-3 py-2 text-xs font-bold transition-colors">Strzalka -></button>
                                 <button @click="duplicateCanvasNode(selectedCanvasNodeId)" :disabled="!selectedCanvasNodeId" :class="selectedCanvasNodeId ? 'bg-white text-slate-600 border-slate-200' : 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'" class="rounded-xl border px-3 py-2 text-xs font-bold transition-colors">Duplikuj</button>
                                 <button @click="selectedCanvasNodeId ? deleteCanvasNode(selectedCanvasNodeId) : (selectedCanvasLinkId ? deleteCanvasLink(selectedCanvasLinkId) : null)" :disabled="!selectedCanvasNodeId && !selectedCanvasLinkId" :class="(selectedCanvasNodeId || selectedCanvasLinkId) ? 'bg-white text-slate-600 border-slate-200' : 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'" class="rounded-xl border px-3 py-2 text-xs font-bold transition-colors">Usun zaznaczone</button>
                                 <button @click="clearCanvasBoard()" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-500 transition-colors hover:bg-slate-50">Wyczysc</button>
-                                <span class="rounded-xl bg-slate-100 px-3 py-2 text-xs font-bold text-slate-500" x-text="`${canvasNodes.length} elementow · ${canvasLinks.length} polaczen`"></span>
+                                <button x-show="canvasBoards.length > 1" x-cloak @click="deleteActiveCanvasBoard()" class="rounded-xl border border-rose-100 bg-white px-3 py-2 text-xs font-bold text-rose-500 transition-colors hover:bg-rose-50">Usun tablice</button>
+                                <span class="rounded-xl bg-slate-100 px-3 py-2 text-xs font-bold text-slate-500" x-text="`${canvasNodes.length} elementow · ${canvasColumns.length} kolumn · ${canvasLinks.length} strzalek`"></span>
                                 <span class="rounded-xl bg-slate-100 px-3 py-2 text-xs font-bold text-slate-500" x-text="`Zoom ${Math.round(canvasZoom * 100)}%`"></span>
                                 <button @click="resetCanvasZoom()" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-500 transition-colors hover:bg-slate-50">Reset zoom</button>
                             </div>
@@ -1159,6 +1183,14 @@
                                 <div x-ref="canvasViewport" :class="canvasPointerAction && canvasPointerAction.mode === 'pan' ? 'canvas-viewport-panning' : ''" class="canvas-viewport overflow-auto rounded-[20px] border border-slate-200 bg-slate-50/70" @contextmenu.prevent @wheel="handleCanvasViewportWheel($event)">
                                     <div class="canvas-board-stage relative" :style="getCanvasStageStyle()">
                                     <div class="canvas-board absolute left-0 top-0" :style="getCanvasBoardStyle()" :class="canvasGridVisible ? 'canvas-board-grid' : ''" @pointerdown="handleCanvasBoardPointerDown($event)">
+                                        <template x-for="column in canvasColumns" :key="column.id">
+                                            <div class="canvas-column" :style="getCanvasColumnStyle(column)" @pointerdown.stop="startCanvasColumnDrag(column, $event)">
+                                                <div class="canvas-column-head">
+                                                    <input :data-canvas-column-id="column.id" :value="column.title" @input="updateCanvasColumnTitle(column.id, $event.target.value)" class="canvas-column-title" />
+                                                    <button @click.stop="deleteCanvasColumn(column.id)" type="button" class="canvas-column-delete">✕</button>
+                                                </div>
+                                            </div>
+                                        </template>
                                         <svg class="canvas-link-layer absolute left-0 top-0 z-[1]" :width="canvasBoardWidth" :height="canvasBoardHeight">
                                             <template x-for="link in getCanvasLinksLayout()" :key="link.id">
                                                 <g>
@@ -1187,19 +1219,35 @@
                                                     <div @pointerdown.stop="startCanvasDrag(node, $event)" class="canvas-node-toolbar">
                                                         <div class="flex min-w-0 items-center gap-2">
                                                             <span class="canvas-node-shape-symbol" x-text="getCanvasShapeSymbol(node.shape)"></span>
-                                                            <span class="truncate" x-text="getCanvasShapeLabel(node.shape)"></span>
+                                                            <span class="truncate" x-text="isCanvasTaskNode(node) ? 'Zadanie' : getCanvasShapeLabel(node.shape)"></span>
                                                         </div>
                                                         <button @click.stop="deleteCanvasNode(node.id)" type="button" class="canvas-node-close">✕</button>
                                                     </div>
-                                                    <textarea :value="node.text" @focus="selectCanvasNode(node.id)" @input="updateCanvasNodeText(node.id, $event.target.value)" rows="4" class="canvas-node-field" placeholder="Wpisz tekst..."></textarea>
+                                                    <template x-if="isCanvasTaskNode(node)">
+                                                        <button type="button" class="canvas-task-body" @click.stop="openCanvasTask(node)">
+                                                            <div class="flex flex-wrap items-center gap-1.5">
+                                                                <span class="canvas-task-status" x-text="getCanvasTaskStatusLabel(node) || 'brak'"></span>
+                                                                <span class="canvas-task-module" x-text="getCanvasTask(node) ? getModuleName(getCanvasTask(node).module_id) : ''"></span>
+                                                            </div>
+                                                            <div class="canvas-task-name" x-text="node.missingTask ? 'Zadanie usuniete' : (node.text || 'Zadanie')"></div>
+                                                            <div x-show="getCanvasTask(node) && getTaskBundleCount(getCanvasTask(node))" x-cloak class="canvas-task-meta" x-text="getCanvasTask(node) ? getTaskBundleLabel(getCanvasTask(node)) : ''"></div>
+                                                        </button>
+                                                    </template>
+                                                    <textarea x-show="!isCanvasTaskNode(node)" :value="node.text" @focus="selectCanvasNode(node.id)" @input="updateCanvasNodeText(node.id, $event.target.value)" rows="4" class="canvas-node-field" placeholder="Wpisz tekst..."></textarea>
                                                 </div>
                                                 <button @pointerdown.stop="startCanvasResize(node, $event)" type="button" class="canvas-node-resize" title="Zmien rozmiar"></button>
                                             </article>
                                         </template>
 
-                                        <template x-if="canvasNodes.length === 0">
+                                        <template x-if="canvasNodes.length === 0 && canvasColumns.length === 0">
                                             <div class="absolute inset-0 z-[3] flex items-center justify-center">
-                                                <button @click="addCanvasNode('text')" class="rounded-2xl bg-slate-900 px-5 py-3 text-sm font-bold text-white transition-colors hover:bg-slate-800">Dodaj pierwszy element</button>
+                                                <div class="rounded-[24px] bg-white/90 px-6 py-5 text-center shadow-sm">
+                                                    <p class="text-sm font-bold text-slate-600">Dodaj kolumne jak w Canvie albo przypnij zadanie.</p>
+                                                    <div class="mt-3 flex flex-wrap justify-center gap-2">
+                                                        <button @click="addCanvasColumn()" class="rounded-2xl bg-slate-900 px-4 py-2.5 text-sm font-bold text-white">Dodaj kolumne</button>
+                                                        <button @click="canvasTaskPickerOpen = true" class="rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-600">Przypnij zadanie</button>
+                                                    </div>
+                                                </div>
                                             </div>
                                         </template>
                                     </div>
@@ -1212,9 +1260,11 @@
                                             <div>
                                                 <p class="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Wybrany element</p>
                                                 <p class="mt-1 text-sm font-black text-slate-900" x-text="getCanvasNodeShortLabel(getSelectedCanvasNode())"></p>
+                                                <p x-show="isCanvasTaskNode(getSelectedCanvasNode())" x-cloak class="mt-1 text-xs font-bold text-slate-500">To jest prawdziwe zadanie. Przesuniecie zmienia tylko uklad.</p>
+                                                <button x-show="isCanvasTaskNode(getSelectedCanvasNode())" x-cloak @click="openCanvasTask(getSelectedCanvasNode())" type="button" class="mt-3 w-full rounded-xl bg-slate-900 px-3 py-2 text-xs font-black text-white">Otworz zadanie</button>
                                             </div>
 
-                                            <div>
+                                            <div x-show="!isCanvasTaskNode(getSelectedCanvasNode())">
                                                 <label class="text-[10px] font-black uppercase tracking-[0.14em] text-slate-400">Ksztalt</label>
                                                 <select :value="getSelectedCanvasNode()?.shape || 'rect'" @change="setCanvasNodeShape(getSelectedCanvasNode().id, $event.target.value)" class="mt-2 w-full rounded-xl border border-slate-200 bg-white/80 px-3 py-2 text-sm font-bold text-slate-700">
                                                     <template x-for="shape in canvasShapeOptions" :key="shape.id">

@@ -1656,6 +1656,102 @@ body.theme-dark .module-accordion-body {
     box-shadow: 0 0 0 2px rgba(15, 23, 42, 0.2), 0 10px 20px rgba(15, 23, 42, 0.12);
 }
 
+.canvas-column {
+    position: absolute;
+    z-index: 0;
+    border: 1px dashed var(--canvas-column-border, #cbd5e1);
+    border-radius: 28px;
+    background: color-mix(in srgb, var(--canvas-column-bg, #f8fafc) 78%, transparent);
+    padding: 0.7rem;
+}
+
+.canvas-column-head {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    cursor: grab;
+}
+
+.canvas-column-title {
+    width: 100%;
+    min-width: 0;
+    border: 0;
+    background: transparent;
+    font-size: 0.82rem;
+    font-weight: 900;
+    color: var(--canvas-column-text, #0f172a);
+    outline: none;
+}
+
+.canvas-column-delete {
+    border-radius: 8px;
+    padding: 0.1rem 0.35rem;
+    font-size: 11px;
+    font-weight: 900;
+    color: #94a3b8;
+}
+
+.canvas-task-picker {
+    position: absolute;
+    top: calc(100% + 0.45rem);
+    left: 0;
+    z-index: 20;
+    width: min(22rem, 78vw);
+    border: 1px solid rgba(148, 163, 184, 0.28);
+    border-radius: 18px;
+    background: #ffffff;
+    padding: 0.75rem;
+    box-shadow: 0 18px 40px rgba(15, 23, 42, 0.18);
+}
+
+.canvas-task-body {
+    display: flex;
+    min-height: 0;
+    flex: 1;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.35rem;
+    border-radius: 12px;
+    padding: 0.35rem 0.4rem;
+    text-align: left;
+}
+
+.canvas-task-status,
+.canvas-task-module {
+    border-radius: 999px;
+    padding: 0.12rem 0.45rem;
+    font-size: 10px;
+    font-weight: 800;
+    line-height: 1.2;
+}
+
+.canvas-task-status {
+    background: rgba(15, 23, 42, 0.08);
+    color: #334155;
+}
+
+.canvas-task-module {
+    background: rgba(255, 255, 255, 0.7);
+    color: #64748b;
+}
+
+.canvas-task-name {
+    font-size: 13px;
+    font-weight: 800;
+    line-height: 1.35;
+    color: inherit;
+}
+
+.canvas-task-meta {
+    font-size: 10px;
+    font-weight: 800;
+    color: #64748b;
+}
+
+.canvas-node-task {
+    min-height: 112px;
+}
+
 .canvas-node-link-origin {
     box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.38), 0 10px 20px rgba(15, 23, 42, 0.12);
 }

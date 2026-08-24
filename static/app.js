@@ -166,6 +166,11 @@
                 canvasMaxZoom: 2.5,
                 canvasGridVisible: true,
                 canvasSnapToGrid: false,
+                canvasBoards: [],
+                activeCanvasBoardId: '',
+                canvasColumns: [],
+                canvasTaskPickerOpen: false,
+                canvasTaskQuery: '',
                 canvasSaveTimer: null,
                 canvasStorageKey: 'adhd-focus-canvas-v2',
                 canvasLegacyStorageKey: 'adhd-focus-canvas-v1',
@@ -982,6 +987,7 @@
                             : [],
                         subtasks: this.normalizeSubtasks(task.subtasks)
                     }));
+                    this.hydrateCanvasTaskNodes();
                 },
 
                 async loadSharingConnections() {
@@ -1239,14 +1245,10 @@
 
                 async loadCanvasBoard() {
                     const applyPayload = (payload) => {
-                        const normalized = this.normalizeCanvasBoard(payload);
-                        this.canvasNodes = normalized.nodes;
-                        this.canvasLinks = normalized.links;
-                        this.canvasGridVisible = normalized.gridVisible;
-                        this.canvasSnapToGrid = normalized.snapToGrid;
-                        this.selectedCanvasNodeId = null;
-                        this.selectedCanvasLinkId = null;
-                        this.canvasLinkDraftFromId = null;
+                        const workspace = this.normalizeCanvasWorkspace(payload);
+                        this.canvasBoards = workspace.boards;
+                        this.activeCanvasBoardId = workspace.activeBoardId;
+                        this.applyActiveCanvasBoard(false);
                     };
 
                     try {
@@ -1254,15 +1256,15 @@
                         if (!res.ok) throw new Error('canvas_load_failed');
                         const data = await res.json();
                         const content = data.content || '';
-                        const parsed = content ? JSON.parse(content) : { version: 2, nodes: [], links: [] };
+                        const parsed = content ? JSON.parse(content) : { version: 3, boards: [] };
                         applyPayload(parsed);
                     } catch (error) {
                         try {
                             const localDraft = localStorage.getItem(this.canvasStorageKey) || localStorage.getItem(this.canvasLegacyStorageKey);
-                            const parsed = localDraft ? JSON.parse(localDraft) : { version: 2, nodes: [], links: [] };
+                            const parsed = localDraft ? JSON.parse(localDraft) : { version: 3, boards: [] };
                             applyPayload(parsed);
                         } catch (readError) {
-                            applyPayload({ version: 2, nodes: [], links: [] });
+                            applyPayload({ version: 3, boards: [] });
                         }
                     }
                 },
@@ -4697,6 +4699,9 @@
                     if (shape === 'text') {
                         return { minWidth: 180, maxWidth: 560, minHeight: 110, maxHeight: 440, defaultWidth: 320, defaultHeight: 170, square: false };
                     }
+                    if (shape === 'task') {
+                        return { minWidth: 200, maxWidth: 420, minHeight: 112, maxHeight: 240, defaultWidth: 268, defaultHeight: 132, square: false };
+                    }
                     return { minWidth: 160, maxWidth: 560, minHeight: 110, maxHeight: 440, defaultWidth: 260, defaultHeight: 170, square: false };
                 },
 
@@ -4716,7 +4721,12 @@
                     return this.canvasColorOptions.find(color => color.id === colorId) || this.canvasColorOptions[0];
                 },
 
+                getCanvasDrawShapes() {
+                    return this.canvasShapeOptions.filter(item => item.id !== 'text');
+                },
+
                 getCanvasShapeLabel(shape) {
+                    if (shape === 'task') return 'Zadanie';
                     return this.canvasShapeOptions.find(option => option.id === shape)?.label || 'Prostokat';
                 },
 
@@ -4725,14 +4735,15 @@
                         text: 'T',
                         rect: '▭',
                         diamond: '◇',
-                        circle: '○'
+                        circle: '○',
+                        task: '▣'
                     }[shape || 'rect'] || '▭';
                 },
 
                 normalizeCanvasNode(node, index, usedIds) {
                     if (!node || typeof node !== 'object') return null;
-                    const allowedShapes = this.canvasShapeOptions.map(shape => shape.id);
-                    const shape = allowedShapes.includes(node.shape) ? node.shape : 'rect';
+                    const allowedShapes = [...this.canvasShapeOptions.map(shape => shape.id), 'task'];
+                    const shape = allowedShapes.includes(node.shape) ? node.shape : (node.taskId ? 'task' : 'rect');
                     const bounds = this.getCanvasShapeBounds(shape);
                     const dimensions = this.coerceCanvasDimensions(shape, node.width ?? bounds.defaultWidth, node.height ?? bounds.defaultHeight);
                     const normalizedColor = node.color === 'white' ? 'slate' : node.color;
@@ -4749,17 +4760,21 @@
                     const x = this.clampCanvasValue(Number(node.x) || 60, 0, maxX);
                     const y = this.clampCanvasValue(Number(node.y) || 60, 0, maxY);
                     const z = Number.isFinite(Number(node.z)) ? Number(node.z) : (index + 1);
+                    const taskId = this.normalizeOptionalId(node.taskId);
+                    const columnId = node.columnId ? String(node.columnId) : null;
 
                     return {
                         id,
-                        shape,
+                        shape: taskId ? 'task' : shape,
                         color,
                         text: typeof node.text === 'string' ? node.text : '',
                         x,
                         y,
                         width: dimensions.width,
                         height: dimensions.height,
-                        z
+                        z,
+                        taskId,
+                        columnId
                     };
                 },
 
@@ -4782,6 +4797,25 @@
                     };
                 },
 
+                normalizeCanvasColumn(column, index, usedIds) {
+                    if (!column || typeof column !== 'object') return null;
+                    let id = column.id ? String(column.id) : this.makeCanvasItemId('col');
+                    while (usedIds.has(id)) id = this.makeCanvasItemId('col');
+                    usedIds.add(id);
+                    const width = this.clampCanvasValue(Number(column.width) || 300, 220, 520);
+                    const maxX = Math.max(0, this.canvasBoardWidth - width - 10);
+                    const color = this.canvasColorOptions.some(option => option.id === column.color)
+                        ? column.color
+                        : this.canvasColorOptions[index % this.canvasColorOptions.length].id;
+                    return {
+                        id,
+                        title: (column.title || `Kolumna ${index + 1}`).toString().slice(0, 48) || `Kolumna ${index + 1}`,
+                        x: this.clampCanvasValue(Number(column.x) || (56 + (index * 328)), 0, maxX),
+                        width,
+                        color
+                    };
+                },
+
                 normalizeCanvasBoard(payload) {
                     const board = payload && typeof payload === 'object' ? payload : {};
                     const rawNodes = Array.isArray(payload) ? payload : (Array.isArray(board.nodes) ? board.nodes : []);
@@ -4799,12 +4833,359 @@
                         .map(link => this.normalizeCanvasLink(link, validNodeIds, usedLinks))
                         .filter(Boolean);
 
+                    const usedColumnIds = new Set();
+                    const columns = (Array.isArray(board.columns) ? board.columns : [])
+                        .map((column, index) => this.normalizeCanvasColumn(column, index, usedColumnIds))
+                        .filter(Boolean);
+                    const validColumnIds = new Set(columns.map(column => column.id));
+                    const nodesWithColumns = nodes.map(node => (
+                        node.columnId && validColumnIds.has(node.columnId) ? node : { ...node, columnId: null }
+                    ));
+
                     return {
-                        nodes,
+                        id: board.id ? String(board.id) : this.makeCanvasItemId('board'),
+                        name: (board.name || 'Tablica').toString().slice(0, 60) || 'Tablica',
+                        nodes: nodesWithColumns,
                         links,
+                        columns,
                         gridVisible: typeof board.gridVisible === 'boolean' ? board.gridVisible : true,
                         snapToGrid: typeof board.snapToGrid === 'boolean' ? board.snapToGrid : false
                     };
+                },
+
+                createEmptyCanvasBoard(name = 'Tablica') {
+                    return {
+                        id: this.makeCanvasItemId('board'),
+                        name: name || 'Tablica',
+                        nodes: [],
+                        links: [],
+                        columns: [],
+                        gridVisible: true,
+                        snapToGrid: false
+                    };
+                },
+
+                normalizeCanvasWorkspace(payload) {
+                    const data = payload && typeof payload === 'object' ? payload : {};
+                    if (Array.isArray(data.boards) && data.boards.length > 0) {
+                        const usedBoardIds = new Set();
+                        const boards = data.boards.map((board, index) => {
+                            const normalized = this.normalizeCanvasBoard(board);
+                            let id = normalized.id;
+                            while (usedBoardIds.has(id)) id = this.makeCanvasItemId('board');
+                            usedBoardIds.add(id);
+                            return { ...normalized, id, name: normalized.name || `Tablica ${index + 1}` };
+                        });
+                        const activeBoardId = boards.some(board => board.id === String(data.activeBoardId || ''))
+                            ? String(data.activeBoardId)
+                            : boards[0].id;
+                        return { boards, activeBoardId };
+                    }
+
+                    const legacy = this.normalizeCanvasBoard(data);
+                    const hasContent = legacy.nodes.length > 0 || legacy.links.length > 0 || legacy.columns.length > 0;
+                    const board = {
+                        ...legacy,
+                        id: this.makeCanvasItemId('board'),
+                        name: hasContent ? 'Tablica 1' : 'Tablica 1'
+                    };
+                    return { boards: [board], activeBoardId: board.id };
+                },
+
+                getActiveCanvasBoard() {
+                    return this.canvasBoards.find(board => board.id === this.activeCanvasBoardId) || this.canvasBoards[0] || null;
+                },
+
+                flushActiveCanvasBoard() {
+                    if (!this.activeCanvasBoardId) return;
+                    this.canvasBoards = this.canvasBoards.map(board => (
+                        board.id === this.activeCanvasBoardId
+                            ? {
+                                ...board,
+                                nodes: this.canvasNodes.map(node => ({ ...node })),
+                                links: this.canvasLinks.map(link => ({ ...link })),
+                                columns: this.canvasColumns.map(column => ({ ...column })),
+                                gridVisible: this.canvasGridVisible,
+                                snapToGrid: this.canvasSnapToGrid
+                            }
+                            : board
+                    ));
+                },
+
+                applyActiveCanvasBoard(shouldSave = false) {
+                    const board = this.getActiveCanvasBoard() || this.createEmptyCanvasBoard('Tablica 1');
+                    if (!this.canvasBoards.some(item => item.id === board.id)) {
+                        this.canvasBoards = [...this.canvasBoards, board];
+                    }
+                    this.activeCanvasBoardId = board.id;
+                    this.canvasNodes = Array.isArray(board.nodes) ? board.nodes.map(node => ({ ...node })) : [];
+                    this.canvasLinks = Array.isArray(board.links) ? board.links.map(link => ({ ...link })) : [];
+                    this.canvasColumns = Array.isArray(board.columns) ? board.columns.map(column => ({ ...column })) : [];
+                    this.canvasGridVisible = board.gridVisible !== false;
+                    this.canvasSnapToGrid = !!board.snapToGrid;
+                    this.selectedCanvasNodeId = null;
+                    this.selectedCanvasLinkId = null;
+                    this.canvasLinkDraftFromId = null;
+                    this.canvasTaskPickerOpen = false;
+                    this.hydrateCanvasTaskNodes();
+                    if (shouldSave) this.saveCanvasBoard();
+                },
+
+                switchCanvasBoard(boardId) {
+                    if (!boardId || boardId === this.activeCanvasBoardId) return;
+                    this.flushActiveCanvasBoard();
+                    this.activeCanvasBoardId = String(boardId);
+                    this.applyActiveCanvasBoard(true);
+                },
+
+                addCanvasBoard() {
+                    this.flushActiveCanvasBoard();
+                    const board = this.createEmptyCanvasBoard(`Tablica ${this.canvasBoards.length + 1}`);
+                    this.canvasBoards = [...this.canvasBoards, board];
+                    this.activeCanvasBoardId = board.id;
+                    this.applyActiveCanvasBoard(true);
+                },
+
+                renameActiveCanvasBoard() {
+                    const board = this.getActiveCanvasBoard();
+                    if (!board) return;
+                    const nextName = prompt('Nazwa tablicy:', board.name || '');
+                    if (nextName === null) return;
+                    const cleanName = nextName.trim().slice(0, 60);
+                    if (!cleanName) return;
+                    this.canvasBoards = this.canvasBoards.map(item => (
+                        item.id === board.id ? { ...item, name: cleanName } : item
+                    ));
+                    this.saveCanvasBoard();
+                },
+
+                deleteActiveCanvasBoard() {
+                    if (this.canvasBoards.length <= 1) {
+                        this.clearCanvasBoard();
+                        return;
+                    }
+                    const boardId = this.activeCanvasBoardId;
+                    this.canvasBoards = this.canvasBoards.filter(board => board.id !== boardId);
+                    this.activeCanvasBoardId = this.canvasBoards[0].id;
+                    this.applyActiveCanvasBoard(true);
+                },
+
+                hydrateCanvasTaskNodes() {
+                    if (!Array.isArray(this.canvasNodes) || this.canvasNodes.length === 0) return;
+                    this.canvasNodes = this.canvasNodes.map(node => {
+                        const taskId = this.normalizeOptionalId(node.taskId);
+                        if (!taskId) return { ...node, missingTask: false };
+                        const task = this.getTaskById(taskId);
+                        if (!task) return { ...node, taskId, shape: 'task', missingTask: true };
+                        return {
+                            ...node,
+                            taskId,
+                            shape: 'task',
+                            text: task.name || node.text || '',
+                            missingTask: false
+                        };
+                    });
+                },
+
+                getCanvasTask(node) {
+                    const taskId = this.normalizeOptionalId(node?.taskId);
+                    return taskId ? this.getTaskById(taskId) : null;
+                },
+
+                isCanvasTaskNode(node) {
+                    return !!(node && (node.shape === 'task' || this.normalizeOptionalId(node.taskId)));
+                },
+
+                getCanvasTaskStatusLabel(node) {
+                    const task = this.getCanvasTask(node);
+                    if (!task) return node?.missingTask ? 'usuniete' : '';
+                    return this.getStatusLabel(task.status);
+                },
+
+                getCanvasPinableTasks() {
+                    const usedIds = new Set(
+                        this.canvasNodes
+                            .map(node => this.normalizeOptionalId(node.taskId))
+                            .filter(Boolean)
+                            .map(Number)
+                    );
+                    const query = (this.canvasTaskQuery || '').trim().toLowerCase();
+                    return this.getOpenTasks().filter(task => {
+                        if (usedIds.has(Number(task.id))) return false;
+                        if (!query) return true;
+                        const moduleName = (this.getModuleName(task.module_id) || '').toLowerCase();
+                        return (task.name || '').toLowerCase().includes(query) || moduleName.includes(query);
+                    }).slice(0, 40);
+                },
+
+                addCanvasColumn() {
+                    const sortedColumns = [...this.canvasColumns].sort((a, b) => a.x - b.x);
+                    const last = sortedColumns[sortedColumns.length - 1];
+                    const width = 300;
+                    const x = last ? last.x + last.width + 28 : 56;
+                    const color = this.canvasColorOptions[this.canvasColumns.length % this.canvasColorOptions.length].id;
+                    const column = {
+                        id: this.makeCanvasItemId('col'),
+                        title: `Kolumna ${this.canvasColumns.length + 1}`,
+                        x,
+                        width,
+                        color
+                    };
+                    this.canvasColumns = [...this.canvasColumns, column];
+                    this.saveCanvasBoard();
+                    this.$nextTick(() => {
+                        const field = document.querySelector(`[data-canvas-column-id="${column.id}"]`);
+                        if (field) field.focus();
+                    });
+                },
+
+                updateCanvasColumnTitle(columnId, title) {
+                    const id = String(columnId || '');
+                    this.canvasColumns = this.canvasColumns.map(column => (
+                        column.id === id ? { ...column, title: (title || '').toString().slice(0, 48) } : column
+                    ));
+                    this.saveCanvasBoard();
+                },
+
+                deleteCanvasColumn(columnId) {
+                    const id = String(columnId || '');
+                    this.canvasColumns = this.canvasColumns.filter(column => column.id !== id);
+                    this.canvasNodes = this.canvasNodes.map(node => (
+                        node.columnId === id ? { ...node, columnId: null } : node
+                    ));
+                    this.saveCanvasBoard();
+                },
+
+                getCanvasColumnStyle(column) {
+                    const color = this.getCanvasColorMeta(column?.color);
+                    const x = Number(column?.x) || 0;
+                    const width = Number(column?.width) || 300;
+                    return `left:${x}px;top:36px;width:${width}px;height:${Math.max(640, this.canvasBoardHeight - 80)}px;--canvas-column-bg:${color.bg};--canvas-column-border:${color.border};--canvas-column-text:${color.text};`;
+                },
+
+                findCanvasColumnAt(x, width) {
+                    const center = Number(x) + (Number(width) / 2);
+                    return this.canvasColumns.find(column => (
+                        center >= Number(column.x) && center <= (Number(column.x) + Number(column.width))
+                    )) || null;
+                },
+
+                snapCanvasNodeToColumn(nodeId) {
+                    const node = this.getCanvasNodeById(nodeId);
+                    if (!node) return;
+                    const column = this.findCanvasColumnAt(node.x, node.width);
+                    const nextX = column
+                        ? this.clampCanvasValue(Number(column.x) + 16, 0, Math.max(0, this.canvasBoardWidth - Number(node.width) - 10))
+                        : node.x;
+                    this.canvasNodes = this.canvasNodes.map(item => (
+                        item.id === node.id
+                            ? { ...item, columnId: column ? column.id : null, x: nextX, width: column ? Math.min(Number(item.width), Number(column.width) - 32) : item.width }
+                            : item
+                    ));
+                },
+
+                startCanvasColumnDrag(column, event) {
+                    if (!column || !event || event.button !== 0) return;
+                    const tagName = event?.target?.tagName?.toLowerCase();
+                    if (tagName === 'input' || tagName === 'button') return;
+                    this.canvasPointerAction = {
+                        mode: 'column-drag',
+                        id: column.id,
+                        startX: event.clientX,
+                        columnX: Number(column.x) || 0,
+                        nodes: this.canvasNodes
+                            .filter(node => node.columnId === column.id)
+                            .map(node => ({ id: node.id, x: Number(node.x) || 0 }))
+                    };
+                    event.preventDefault();
+                    event.stopPropagation();
+                },
+
+                pinTaskToCanvas(task, columnId = null) {
+                    if (!task) return;
+                    const existing = this.canvasNodes.find(node => Number(node.taskId) === Number(task.id));
+                    if (existing) {
+                        this.selectedCanvasNodeId = existing.id;
+                        this.canvasTaskPickerOpen = false;
+                        this.showToast('To zadanie juz jest na tablicy.');
+                        return;
+                    }
+                    const column = columnId
+                        ? this.canvasColumns.find(item => item.id === columnId)
+                        : (this.canvasColumns[0] || null);
+                    const bounds = this.getCanvasShapeBounds('task');
+                    const dimensions = this.coerceCanvasDimensions('task', bounds.defaultWidth, bounds.defaultHeight);
+                    const viewport = this.$refs?.canvasViewport;
+                    const zoom = this.clampCanvasZoom(this.canvasZoom || 1);
+                    const fallbackX = viewport ? ((viewport.scrollLeft + 80) / zoom) : 80;
+                    const fallbackY = viewport ? ((viewport.scrollTop + 140) / zoom) : 140;
+                    const x = column ? column.x + 16 : fallbackX;
+                    const sameColumnCount = this.canvasNodes.filter(node => node.columnId === (column?.id || null)).length;
+                    const y = fallbackY + (sameColumnCount * 24);
+                    const node = {
+                        id: this.makeCanvasItemId('node'),
+                        shape: 'task',
+                        color: 'slate',
+                        text: task.name || '',
+                        x,
+                        y,
+                        width: column ? Math.min(dimensions.width, column.width - 32) : dimensions.width,
+                        height: dimensions.height,
+                        z: this.canvasNodes.reduce((max, item) => Math.max(max, Number(item.z) || 0), 0) + 1,
+                        taskId: task.id,
+                        columnId: column ? column.id : null
+                    };
+                    this.canvasNodes = [...this.canvasNodes, node];
+                    this.selectedCanvasNodeId = node.id;
+                    this.canvasTaskPickerOpen = false;
+                    this.canvasTaskQuery = '';
+                    this.saveCanvasBoard();
+                },
+
+                async createTaskOnCanvas() {
+                    const name = (this.canvasTaskQuery || '').trim();
+                    if (!name) {
+                        this.canvasTaskPickerOpen = true;
+                        return;
+                    }
+                    try {
+                        const response = await fetch(`${this.API}/tasks`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ name, status: 'oczekujace' })
+                        });
+                        if (!response.ok) {
+                            this.showToast(await this.getApiErrorMessage(response, 'Nie udalo sie dodac zadania na tablice.'));
+                            return;
+                        }
+                        const created = await response.json();
+                        await this.loadAllTasks();
+                        const task = this.getTaskById(created.id);
+                        if (task) this.pinTaskToCanvas(task);
+                        this.showToast('Zadanie na tablicy. Status nadal jest w kanbanie.', 'success');
+                    } catch (error) {
+                        this.showToast('Nie udalo sie dodac zadania na tablice.');
+                    }
+                },
+
+                openCanvasTask(node) {
+                    const task = this.getCanvasTask(node);
+                    if (!task) {
+                        this.showToast('Tego zadania juz nie ma. Mozesz zdjac kafel z tablicy.');
+                        return;
+                    }
+                    this.openTaskModal(task);
+                },
+
+                getCanvasNodeShortLabel(node) {
+                    if (!node) return 'Element';
+                    if (this.isCanvasTaskNode(node)) {
+                        const task = this.getCanvasTask(node);
+                        return (task?.name || node.text || 'Zadanie').slice(0, 34);
+                    }
+                    const firstLine = (node.text || '').split('\n').map(line => line.trim()).find(Boolean);
+                    if (firstLine) return firstLine.slice(0, 34);
+                    return this.getCanvasShapeLabel(node.shape);
                 },
 
                 getCanvasNodeById(nodeId) {
@@ -4831,14 +5212,7 @@
 
                 getCanvasNodeClass(node) {
                     const shape = node?.shape || 'rect';
-                    return `canvas-node-${shape}`;
-                },
-
-                getCanvasNodeShortLabel(node) {
-                    if (!node) return 'Element';
-                    const firstLine = (node.text || '').split('\n').map(line => line.trim()).find(Boolean);
-                    if (firstLine) return firstLine.slice(0, 34);
-                    return this.getCanvasShapeLabel(node.shape);
+                    return this.isCanvasTaskNode(node) ? 'canvas-node-task' : `canvas-node-${shape}`;
                 },
 
                 getCanvasLinksLayout() {
@@ -4969,7 +5343,9 @@
                         y: this.clampCanvasValue(baseY + offset, 0, maxY),
                         width: dimensions.width,
                         height: dimensions.height,
-                        z: this.canvasNodes.reduce((max, item) => Math.max(max, Number(item.z) || 0), 0) + 1
+                        z: this.canvasNodes.reduce((max, item) => Math.max(max, Number(item.z) || 0), 0) + 1,
+                        taskId: null,
+                        columnId: null
                     };
 
                     this.canvasNodes = [...this.canvasNodes, node];
@@ -4982,6 +5358,10 @@
                 duplicateCanvasNode(nodeId) {
                     const sourceNode = this.getCanvasNodeById(nodeId);
                     if (!sourceNode) return;
+                    if (this.isCanvasTaskNode(sourceNode)) {
+                        this.showToast('Zadanie moze byc na tablicy raz. Przesun kafel albo dodaj strzalke.');
+                        return;
+                    }
                     const maxX = Math.max(0, this.canvasBoardWidth - Number(sourceNode.width) - 10);
                     const maxY = Math.max(0, this.canvasBoardHeight - Number(sourceNode.height) - 10);
                     const duplicated = {
@@ -5195,9 +5575,32 @@
                         return;
                     }
 
+                    const zoom = this.clampCanvasZoom(this.canvasZoom || 1);
+
+                    if (action.mode === 'column-drag') {
+                        const column = this.canvasColumns.find(item => item.id === action.id);
+                        if (!column) return;
+                        const deltaX = (event.clientX - action.startX) / zoom;
+                        const maxX = Math.max(0, this.canvasBoardWidth - Number(column.width) - 10);
+                        const nextX = this.clampCanvasValue(action.columnX + deltaX, 0, maxX);
+                        const shift = nextX - Number(column.x);
+                        this.canvasColumns = this.canvasColumns.map(item => (
+                            item.id === action.id ? { ...item, x: nextX } : item
+                        ));
+                        if (shift !== 0) {
+                            const movedIds = new Set((action.nodes || []).map(item => item.id));
+                            this.canvasNodes = this.canvasNodes.map(node => {
+                                if (!movedIds.has(node.id)) return node;
+                                const origin = (action.nodes || []).find(item => item.id === node.id);
+                                const nodeMaxX = Math.max(0, this.canvasBoardWidth - Number(node.width) - 10);
+                                return { ...node, x: this.clampCanvasValue((origin?.x || 0) + deltaX, 0, nodeMaxX) };
+                            });
+                        }
+                        return;
+                    }
+
                     const node = this.getCanvasNodeById(action.id);
                     if (!node) return;
-                    const zoom = this.clampCanvasZoom(this.canvasZoom || 1);
 
                     if (action.mode === 'drag') {
                         let nextX = action.nodeX + ((event.clientX - action.startX) / zoom);
@@ -5237,7 +5640,9 @@
 
                 endCanvasDrag() {
                     if (!this.canvasPointerAction) return;
-                    const shouldSave = this.canvasPointerAction.mode === 'drag' || this.canvasPointerAction.mode === 'resize';
+                    const action = this.canvasPointerAction;
+                    const shouldSave = action.mode === 'drag' || action.mode === 'resize' || action.mode === 'column-drag';
+                    if (action.mode === 'drag') this.snapCanvasNodeToColumn(action.id);
                     this.canvasPointerAction = null;
                     if (shouldSave) this.saveCanvasBoard();
                 },
@@ -5245,8 +5650,10 @@
                 clearCanvasBoard() {
                     const previousNodes = this.canvasNodes.map(node => ({ ...node }));
                     const previousLinks = this.canvasLinks.map(link => ({ ...link }));
+                    const previousColumns = this.canvasColumns.map(column => ({ ...column }));
                     this.canvasNodes = [];
                     this.canvasLinks = [];
+                    this.canvasColumns = [];
                     this.selectedCanvasNodeId = null;
                     this.selectedCanvasLinkId = null;
                     this.canvasLinkDraftFromId = null;
@@ -5257,6 +5664,7 @@
                         onAction: () => {
                             this.canvasNodes = previousNodes;
                             this.canvasLinks = previousLinks;
+                            this.canvasColumns = previousColumns;
                             this.saveCanvasBoard();
                             this.showToast('Przywrócono tablicę.', 'success');
                         },
@@ -5265,12 +5673,11 @@
                 },
 
                 serializeCanvasBoard() {
+                    this.flushActiveCanvasBoard();
                     return JSON.stringify({
-                        version: 2,
-                        nodes: this.canvasNodes,
-                        links: this.canvasLinks,
-                        gridVisible: this.canvasGridVisible,
-                        snapToGrid: this.canvasSnapToGrid
+                        version: 3,
+                        activeBoardId: this.activeCanvasBoardId,
+                        boards: this.canvasBoards
                     });
                 },
 
