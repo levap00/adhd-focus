@@ -7,10 +7,10 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/app.css?v=20260824-2">
+    <link rel="stylesheet" href="/static/app.css?v=20260824-3">
     <meta name="apple-mobile-web-app-capable" content="yes">
 
-    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 
     <meta name="apple-mobile-web-app-title" content="Focus">
 
@@ -18,7 +18,7 @@
 
     <link rel="manifest" href="/static/manifest.json">
     <script src="https://cdn.tailwindcss.com"></script>
-    <script defer src="/static/app.js?v=20260824-2"></script>
+    <script defer src="/static/app.js?v=20260824-3"></script>
     <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
 </head>
 <body x-data="app()" x-init="init()" @keydown.window="handleKeydown($event)" @resize.window="handleViewportResize()" @pointermove.window="moveCanvasDrag($event)" @pointerup.window="endCanvasDrag()" :class="[theme === 'dark' ? 'theme-dark' : 'theme-light', (taskModal || shareTaskModal || monthlyTaskModal || debtModal || quickCaptureOpen) ? 'modal-open' : '', keyboardOpen ? 'keyboard-open' : '']">
