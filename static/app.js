@@ -64,6 +64,22 @@
                 outgoingSharingInvitations: [],
                 sharingInviteUsername: '',
                 sharingLoading: false,
+                securityProfileLoaded: false,
+                securitySaving: false,
+                securityAwaitingCode: false,
+                securityEmailDraft: '',
+                securityEmailCode: '',
+                securityProfile: {
+                    username: '',
+                    email: '',
+                    email_masked: '',
+                    email_verified: false,
+                    mailer_configured: false,
+                    pending_email: '',
+                    pending_email_masked: '',
+                    devices: [],
+                    dev_code: ''
+                },
                 shareTaskModal: false,
                 sharingTaskId: null,
                 shareTaskDueTime: '',
@@ -399,7 +415,7 @@
                         this.view = this.isMobileLayout ? 'calendar' : 'combined';
                         this.setTaskScope('all');
                         consumed = true;
-                    } else if (['dash', 'kanban', 'global', 'calendar', 'brain', 'canvas', 'docs', 'monthly', 'debts', 'notifications', 'sharing'].includes(requestedView)) {
+                    } else if (['dash', 'kanban', 'global', 'calendar', 'brain', 'canvas', 'docs', 'monthly', 'debts', 'notifications', 'sharing', 'security'].includes(requestedView)) {
                         this.view = requestedView;
                         consumed = true;
                     }
@@ -443,6 +459,7 @@
                         this.loadNotificationSettings(),
                         this.loadNotificationHistory(),
                         this.loadSharingConnections(),
+                        this.loadSecurityProfile(),
                         this.loadCanvasBoard(),
                         this.loadProjectDoc(),
                         this.loadMonthlyTasks(),
@@ -556,10 +573,11 @@
                         this.view = 'brain';
                         return;
                     }
-                    const allowedViews = ['canvas', 'docs', 'monthly', 'meds', 'debts', 'notifications', 'sharing'];
+                    const allowedViews = ['canvas', 'docs', 'monthly', 'meds', 'debts', 'notifications', 'sharing', 'security'];
                     if (allowedViews.includes(target)) {
                         this.view = target;
                         if (target === 'sharing') this.loadSharingConnections();
+                        if (target === 'security') this.loadSecurityProfile();
                     }
                 },
 
@@ -924,6 +942,139 @@
                         this.incomingSharingInvitations = [];
                         this.outgoingSharingInvitations = [];
                     }
+                },
+
+
+                applySecurityProfile(payload) {
+                    const next = payload && typeof payload === 'object' ? payload : {};
+                    this.securityProfile = {
+                        username: (next.username || '').toString(),
+                        email: (next.email || '').toString(),
+                        email_masked: (next.email_masked || '').toString(),
+                        email_verified: !!next.email_verified,
+                        mailer_configured: !!next.mailer_configured,
+                        pending_email: (next.pending_email || '').toString(),
+                        pending_email_masked: (next.pending_email_masked || '').toString(),
+                        devices: Array.isArray(next.devices) ? next.devices : [],
+                        dev_code: (next.dev_code || '').toString()
+                    };
+                    this.securityProfileLoaded = true;
+                    this.securityAwaitingCode = !!this.securityProfile.pending_email;
+                    if (this.securityProfile.email && !this.securityEmailDraft) {
+                        this.securityEmailDraft = this.securityProfile.email;
+                    }
+                },
+
+                async loadSecurityProfile() {
+                    try {
+                        const response = await fetch(`${this.API}/security/profile`);
+                        if (!response.ok) throw new Error('security_profile_failed');
+                        this.applySecurityProfile(await response.json());
+                    } catch (error) {
+                        this.securityProfileLoaded = true;
+                    }
+                },
+
+                formatSecurityTime(value) {
+                    const raw = (value || '').toString();
+                    if (!raw) return 'brak aktywności';
+                    const parsed = new Date(raw);
+                    if (Number.isNaN(parsed.getTime())) return raw;
+                    return parsed.toLocaleString('pl-PL', { dateStyle: 'short', timeStyle: 'short' });
+                },
+
+                async startEmailVerification() {
+                    const email = (this.securityEmailDraft || '').trim();
+                    if (!email) {
+                        this.showToast('Wpisz adres e-mail.');
+                        return;
+                    }
+                    this.securitySaving = true;
+                    try {
+                        const response = await fetch(`${this.API}/security/email/start`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ email })
+                        });
+                        if (!response.ok) {
+                            this.showToast(await this.getApiErrorMessage(response, 'Nie udalo sie wyslac kodu.'));
+                            return;
+                        }
+                        const payload = await response.json();
+                        this.securityAwaitingCode = true;
+                        this.securityEmailCode = '';
+                        this.securityProfile.pending_email_masked = payload.email_masked || email;
+                        this.securityProfile.dev_code = payload.dev_code || '';
+                        this.showToast('Kod poszedl na e-mail.', 'success');
+                    } finally {
+                        this.securitySaving = false;
+                    }
+                },
+
+                async resendEmailVerification() {
+                    this.securitySaving = true;
+                    try {
+                        const response = await fetch(`${this.API}/security/email/resend`, { method: 'POST' });
+                        if (!response.ok) {
+                            this.showToast(await this.getApiErrorMessage(response, 'Nie udalo sie wyslac kodu ponownie.'));
+                            return;
+                        }
+                        const payload = await response.json();
+                        this.securityProfile.pending_email_masked = payload.email_masked || this.securityProfile.pending_email_masked;
+                        this.securityProfile.dev_code = payload.dev_code || '';
+                        this.showToast('Wyslalismy nowy kod.', 'success');
+                    } finally {
+                        this.securitySaving = false;
+                    }
+                },
+
+                async confirmEmailVerification() {
+                    const code = (this.securityEmailCode || '').trim();
+                    if (!code) {
+                        this.showToast('Wpisz kod z e-maila.');
+                        return;
+                    }
+                    this.securitySaving = true;
+                    try {
+                        const response = await fetch(`${this.API}/security/email/confirm`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ code })
+                        });
+                        if (!response.ok) {
+                            this.showToast(await this.getApiErrorMessage(response, 'Niepoprawny kod.'));
+                            return;
+                        }
+                        this.applySecurityProfile(await response.json());
+                        this.securityEmailCode = '';
+                        this.securityAwaitingCode = false;
+                        this.showToast('E-mail potwierdzony. Nowe urzadzenia beda prosic o kod.', 'success');
+                    } finally {
+                        this.securitySaving = false;
+                    }
+                },
+
+                async revokeTrustedDevice(device) {
+                    if (!device?.id) return;
+                    if (!await this.askConfirmation('Odwołać to urządzenie? Przy następnym logowaniu poprosi o kod z e-maila.', 'Odwołaj')) return;
+                    const response = await fetch(`${this.API}/security/devices/${device.id}`, { method: 'DELETE' });
+                    if (!response.ok) {
+                        this.showToast(await this.getApiErrorMessage(response, 'Nie udalo sie odwolac urzadzenia.'));
+                        return;
+                    }
+                    await this.loadSecurityProfile();
+                    this.showToast('Urządzenie odwołane.', 'success');
+                },
+
+                async revokeAllTrustedDevices() {
+                    if (!await this.askConfirmation('Wylogować wszystkie zapisane urządzenia? Każde będzie musiało potwierdzić kod z e-maila.', 'Wyloguj wszystkie')) return;
+                    const response = await fetch(`${this.API}/security/devices/revoke-all`, { method: 'POST' });
+                    if (!response.ok) {
+                        this.showToast(await this.getApiErrorMessage(response, 'Nie udalo sie wylogowac urzadzen.'));
+                        return;
+                    }
+                    await this.loadSecurityProfile();
+                    this.showToast('Wyczyszczono zaufane urządzenia.', 'success');
                 },
 
                 async sendSharingInvitation() {

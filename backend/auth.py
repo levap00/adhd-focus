@@ -8,6 +8,8 @@ from contextvars import ContextVar, Token
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+from fastapi.responses import Response
+
 from dotenv import load_dotenv
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
@@ -18,9 +20,13 @@ from backend.passwords import get_password_hash, verify_password
 load_dotenv()
 
 SESSION_COOKIE_NAME = os.getenv("FOCUS_SESSION_COOKIE_NAME", "focus_session")
+DEVICE_COOKIE_NAME = os.getenv("FOCUS_DEVICE_COOKIE_NAME", "focus_device")
+CHALLENGE_COOKIE_NAME = os.getenv("FOCUS_CHALLENGE_COOKIE_NAME", "focus_login_challenge")
 SESSION_COOKIE_SECURE_MODE = (os.getenv("FOCUS_COOKIE_SECURE", "auto") or "auto").strip().lower()
 SESSION_TTL_SECONDS = max(300, int(os.getenv("FOCUS_SESSION_TTL_SECONDS", "43200")))
 SESSION_REMEMBER_TTL_SECONDS = max(300, int(os.getenv("FOCUS_SESSION_REMEMBER_TTL_SECONDS", "2592000")))
+DEVICE_TTL_SECONDS = max(86400, int(os.getenv("FOCUS_DEVICE_TTL_SECONDS", str(180 * 24 * 3600))))
+CHALLENGE_TTL_SECONDS = max(120, int(os.getenv("FOCUS_CHALLENGE_TTL_SECONDS", "900")))
 SESSION_SECRET = os.getenv("FOCUS_SESSION_SECRET", f"{ACCOUNTS_DB_PATH}:focus-session-secret")
 
 security = HTTPBasic(auto_error=False)
@@ -177,3 +183,105 @@ async def verify_credentials(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Brak dostepu. Zaloguj sie przez /login.",
     )
+
+
+def request_ip(request: Request) -> str:
+    forwarded = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
+    if forwarded:
+        return forwarded[:64]
+    if request.client and request.client.host:
+        return request.client.host[:64]
+    return ""
+
+
+def request_user_agent(request: Request) -> str:
+    return (request.headers.get("user-agent") or "")[:300]
+
+
+def _cookie_kwargs(request: Request, max_age: int) -> dict:
+    return {
+        "max_age": max_age,
+        "httponly": True,
+        "secure": should_set_secure_cookie(request),
+        "samesite": "lax",
+        "path": "/",
+    }
+
+
+def attach_session_cookie(response: Response, request: Request, username: str, remember: bool = False) -> None:
+    token = create_session_token(username=username, remember=remember)
+    response.set_cookie(
+        key=SESSION_COOKIE_NAME,
+        value=token,
+        **_cookie_kwargs(request, SESSION_REMEMBER_TTL_SECONDS if remember else SESSION_TTL_SECONDS),
+    )
+
+
+def attach_device_cookie(response: Response, request: Request, raw_token: str) -> None:
+    if not raw_token:
+        return
+    response.set_cookie(
+        key=DEVICE_COOKIE_NAME,
+        value=raw_token,
+        **_cookie_kwargs(request, DEVICE_TTL_SECONDS),
+    )
+
+
+def create_challenge_token(challenge_id: str) -> str:
+    expires_at = int((datetime.now(timezone.utc) + timedelta(seconds=CHALLENGE_TTL_SECONDS)).timestamp())
+    payload = f"{challenge_id}|{expires_at}"
+    signature = _sign_payload(payload)
+    raw_token = f"{payload}|{signature}".encode("utf-8")
+    return base64.urlsafe_b64encode(raw_token).decode("utf-8")
+
+
+def decode_challenge_token(token: str) -> Optional[str]:
+    if not token:
+        return None
+    try:
+        raw_token = base64.urlsafe_b64decode(token.encode("utf-8")).decode("utf-8")
+    except Exception:
+        return None
+
+    parts = raw_token.split("|")
+    if len(parts) != 3:
+        return None
+
+    challenge_id, expires_at_raw, signature = parts
+    try:
+        expires_at = int(expires_at_raw)
+    except ValueError:
+        return None
+
+    if expires_at < int(datetime.now(timezone.utc).timestamp()):
+        return None
+
+    payload = f"{challenge_id}|{expires_at}"
+    if not secrets.compare_digest(signature, _sign_payload(payload)):
+        return None
+    return challenge_id
+
+
+def attach_challenge_cookie(response: Response, request: Request, challenge_id: str) -> None:
+    response.set_cookie(
+        key=CHALLENGE_COOKIE_NAME,
+        value=create_challenge_token(challenge_id),
+        **_cookie_kwargs(request, CHALLENGE_TTL_SECONDS),
+    )
+
+
+def clear_challenge_cookie(response: Response) -> None:
+    response.delete_cookie(key=CHALLENGE_COOKIE_NAME, path="/")
+
+
+def clear_session_cookie(response: Response) -> None:
+    response.delete_cookie(key=SESSION_COOKIE_NAME, path="/")
+
+
+def get_device_token(request: Request) -> str:
+    return (request.cookies.get(DEVICE_COOKIE_NAME) or "").strip()
+
+
+def get_challenge_id(request: Request) -> Optional[str]:
+    return decode_challenge_token(request.cookies.get(CHALLENGE_COOKIE_NAME, ""))
+
