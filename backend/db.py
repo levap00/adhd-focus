@@ -23,6 +23,30 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) 
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
 
 
+INBOX_MODULE_NAME = "Do przypisania"
+
+
+def ensure_inbox_module(conn: sqlite3.Connection, owner_user_id: int) -> int:
+    owner_id = int(owner_user_id)
+    inbox = conn.execute(
+        """
+        SELECT id
+        FROM modules
+        WHERE owner_user_id = ? AND LOWER(TRIM(name)) = ?
+        ORDER BY id
+        LIMIT 1
+        """,
+        (owner_id, INBOX_MODULE_NAME.lower()),
+    ).fetchone()
+    if inbox:
+        return int(inbox["id"])
+    cursor = conn.execute(
+        "INSERT INTO modules (name, category, owner_user_id) VALUES (?, 'praca', ?)",
+        (INBOX_MODULE_NAME, owner_id),
+    )
+    return int(cursor.lastrowid)
+
+
 def _assign_orphan_tasks_to_inbox(conn: sqlite3.Connection) -> None:
     owners = conn.execute(
         """
@@ -33,28 +57,12 @@ def _assign_orphan_tasks_to_inbox(conn: sqlite3.Connection) -> None:
     ).fetchall()
     for owner in owners:
         owner_user_id = int(owner["owner_user_id"])
-        inbox = conn.execute(
-            """
-            SELECT id
-            FROM modules
-            WHERE owner_user_id = ? AND LOWER(TRIM(name)) = 'do przypisania'
-            ORDER BY id
-            LIMIT 1
-            """,
-            (owner_user_id,),
-        ).fetchone()
-        if inbox:
-            inbox_id = int(inbox["id"])
-        else:
-            cursor = conn.execute(
-                "INSERT INTO modules (name, category, owner_user_id) VALUES ('Do przypisania', 'praca', ?)",
-                (owner_user_id,),
-            )
-            inbox_id = int(cursor.lastrowid)
+        inbox_id = ensure_inbox_module(conn, owner_user_id)
         conn.execute(
             "UPDATE tasks SET module_id = ? WHERE owner_user_id = ? AND module_id IS NULL",
             (inbox_id, owner_user_id),
         )
+
 
 
 

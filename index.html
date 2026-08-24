@@ -7,7 +7,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/app.css?v=20260821-1">
+    <link rel="stylesheet" href="/static/app.css?v=20260824-1">
     <meta name="apple-mobile-web-app-capable" content="yes">
 
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
@@ -18,10 +18,10 @@
 
     <link rel="manifest" href="/static/manifest.json">
     <script src="https://cdn.tailwindcss.com"></script>
-    <script defer src="/static/app.js?v=20260821-1"></script>
+    <script defer src="/static/app.js?v=20260824-1"></script>
     <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
 </head>
-<body x-data="app()" x-init="init()" @keydown.window="handleKeydown($event)" @resize.window="handleViewportResize()" @pointermove.window="moveCanvasDrag($event)" @pointerup.window="endCanvasDrag()" :class="[theme === 'dark' ? 'theme-dark' : 'theme-light', (taskModal || shareTaskModal || monthlyTaskModal || debtModal) ? 'modal-open' : '', keyboardOpen ? 'keyboard-open' : '']">
+<body x-data="app()" x-init="init()" @keydown.window="handleKeydown($event)" @resize.window="handleViewportResize()" @pointermove.window="moveCanvasDrag($event)" @pointerup.window="endCanvasDrag()" :class="[theme === 'dark' ? 'theme-dark' : 'theme-light', (taskModal || shareTaskModal || monthlyTaskModal || debtModal || quickCaptureOpen) ? 'modal-open' : '', keyboardOpen ? 'keyboard-open' : '']">
     <div class="min-h-screen">
         <header class="topbar z-40 border-b border-slate-200/70">
             <div class="mx-auto max-w-[1850px] px-4 py-2 md:px-6">
@@ -36,7 +36,7 @@
 
                     <div class="topbar-actions flex items-center justify-end gap-2">
                         <button
-                            @click="closeOverlayMenus(); openNewTaskModal()"
+                            @click="closeOverlayMenus(); openQuickCapture()"
                             type="button"
                             class="desktop-new-task-button"
                         >
@@ -328,24 +328,21 @@
                             <section class="card dashboard-brain-card p-5 md:p-6">
                                 <div class="dashboard-section-head mb-5 flex flex-wrap items-end justify-between gap-4">
                                     <div>
-                                        <p class="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400">Brain dump</p>
-                                        <h3 class="dashboard-section-title mt-1 text-2xl font-black text-slate-900">Wyrzuc wszystko z glowy</h3>
+                                        <p class="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400">Do przypisania</p>
+                                        <h3 class="dashboard-section-title mt-1 text-2xl font-black text-slate-900">Wrzuty, zeby nic nie ucieklo</h3>
                                     </div>
-                                    <button @click="view = 'brain'" class="rounded-2xl bg-slate-100 px-4 py-2.5 text-sm font-bold text-slate-600 transition-colors hover:bg-slate-200">Pelny widok</button>
+                                    <button @click="openQuickCapture()" class="rounded-2xl bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white transition-colors hover:bg-emerald-700">+ Wrzut</button>
                                 </div>
 
-                                <div class="dashboard-brain-preview rounded-[24px] border border-slate-200 bg-slate-50/80 p-4">
-                                    <p class="text-sm leading-7 text-slate-600" x-text="getBrainDumpPreview()"></p>
-                                </div>
-
-                                <div class="dashboard-brain-stats mt-4 grid gap-3 md:grid-cols-2">
-                                    <div class="dashboard-brain-stat rounded-[22px] bg-emerald-50 px-4 py-4">
-                                        <div class="text-2xl font-black text-emerald-700" x-text="brainDumpNotes.length"></div>
-                                        <div class="mt-1 text-xs font-bold uppercase tracking-[0.18em] text-emerald-700/80">notatki</div>
-                                    </div>
-                                    <div class="dashboard-brain-stat rounded-[22px] bg-slate-100 px-4 py-4">
-                                        <div class="text-2xl font-black text-slate-700" x-text="getBrainDumpLastSavedAt() ? formatNoteTimestamp(getBrainDumpLastSavedAt()) : 'brak'"></div>
-                                        <div class="mt-1 text-xs font-bold uppercase tracking-[0.18em] text-slate-500">ostatni zapis</div>
+                                <div class="space-y-2">
+                                    <template x-for="task in getInboxTasks(6)" :key="'inbox-' + task.id">
+                                        <button type="button" class="inbox-dash-item" @click="openTaskModal(task)">
+                                            <span class="min-w-0 text-sm font-bold leading-6 text-slate-900" x-text="task.name"></span>
+                                            <span class="shrink-0 text-[10px] font-black uppercase tracking-[0.14em] text-slate-400">Szczegoly</span>
+                                        </button>
+                                    </template>
+                                    <div x-show="getInboxTasks(6).length === 0" x-cloak class="rounded-[24px] border border-dashed border-slate-200 px-4 py-8 text-center text-sm leading-6 text-slate-400">
+                                        Plusem wrzucasz mysl. Laduja tutaj, bez daty i bez zgadywania.
                                     </div>
                                 </div>
                             </section>
@@ -530,6 +527,14 @@
                                                                 <span x-show="isTaskShared(task)" x-cloak class="shared-task-badge shared-task-badge-compact" x-text="getTaskSharedLabel(task)"></span>
                                                             </div>
                                                             <div x-show="col.id !== 'gotowe' && getTaskDescriptionPreview(task, taskScope === 'module' ? 14 : 8)" x-cloak class="mt-1 text-[11px] leading-4 text-slate-600" x-text="getTaskDescriptionPreview(task, taskScope === 'module' ? 14 : 8)"></div>
+                                                            <div x-show="col.id !== 'gotowe' && getTaskBundleCount(task)" x-cloak class="task-subtask-list" @click.stop>
+                                                                <template x-for="subtask in getVisibleCardSubtasks(task)" :key="'mini-sub-' + task.id + '-' + (subtask.id || subtask.title)">
+                                                                    <label :class="subtask.done ? 'task-subtask-item is-done' : 'task-subtask-item'">
+                                                                        <input type="checkbox" :checked="subtask.done" @change="toggleCardSubtask(task, subtask, $event.target.checked)" />
+                                                                        <span x-text="subtask.title"></span>
+                                                                    </label>
+                                                                </template>
+                                                            </div>
                                                         </div>
                                                     </template>
 
@@ -681,6 +686,15 @@
                                                                 <span x-show="isTaskShared(task)" x-cloak class="shared-task-badge shared-task-badge-compact" x-text="getTaskSharedLabel(task)"></span>
                                                             </div>
                                                             <div x-show="col.id !== 'gotowe' && getTaskDescriptionPreview(task)" x-cloak class="mt-1 text-[11px] leading-4 text-slate-600" x-text="getTaskDescriptionPreview(task)"></div>
+                                                            <div x-show="col.id !== 'gotowe' && getTaskBundleCount(task)" x-cloak class="task-subtask-list" @click.stop>
+                                                                <template x-for="subtask in getVisibleCardSubtasks(task)" :key="'kanban-sub-' + task.id + '-' + (subtask.id || subtask.title)">
+                                                                    <label :class="subtask.done ? 'task-subtask-item is-done' : 'task-subtask-item'">
+                                                                        <input type="checkbox" :checked="subtask.done" @change="toggleCardSubtask(task, subtask, $event.target.checked)" />
+                                                                        <span x-text="subtask.title"></span>
+                                                                    </label>
+                                                                </template>
+                                                                <div x-show="getTaskBundleCount(task) > 4" class="text-[10px] font-bold text-slate-400" x-text="'+' + (getTaskBundleCount(task) - 4) + ' kolejnych'"></div>
+                                                            </div>
                                                         </div>
                                                     </template>
                                                 </div>
@@ -1929,12 +1943,34 @@
             </button>
         </nav>
 
-        <div class="fab-speed-dial" @click.outside="closeFab()">
-            <div x-show="fabOpen" x-cloak x-transition.origin.bottom.right class="fab-actions">
-                <button @click="openFabNewTask()" class="fab-action" type="button">Dodaj zadanie</button>
-                <button @click="openBrainDumpAction()" class="fab-action" type="button">Dodaj do Brain Dump</button>
+        <div class="fab-speed-dial">
+            <button @click="openQuickCapture()" class="fab-main" type="button" aria-label="Szybki wrzut">+</button>
+        </div>
+
+        <div x-show="quickCaptureOpen" x-cloak class="quick-capture-backdrop" @click.self="closeQuickCapture()">
+            <div class="quick-capture-sheet" @click.stop>
+                <div class="flex items-start justify-between gap-3">
+                    <div>
+                        <p class="text-[10px] font-black uppercase tracking-[0.22em] text-emerald-700">Szybki wrzut</p>
+                        <h3 class="mt-1 text-xl font-black text-slate-900">Co masz na glowie?</h3>
+                    </div>
+                    <button @click="closeQuickCapture()" type="button" class="rounded-xl px-3 py-2 text-sm font-black text-slate-400 hover:bg-slate-100">✕</button>
+                </div>
+                <form class="mt-4" @submit.prevent="submitQuickCapture()">
+                    <input
+                        x-ref="quickCaptureInput"
+                        x-model="quickCaptureText"
+                        class="quick-capture-input"
+                        placeholder="Np. kupic filtr, oddzwonic do Tomka"
+                        autocomplete="off"
+                    />
+                    <div class="mt-3 flex flex-wrap items-center gap-2">
+                        <button type="submit" :disabled="quickCaptureSaving || !(quickCaptureText || '').trim()" class="rounded-2xl bg-emerald-600 px-5 py-3 text-sm font-black text-white transition-colors hover:bg-emerald-700 disabled:opacity-50">Zapisz</button>
+                        <button type="button" @click="openDetailsFromQuickCapture()" class="rounded-2xl px-4 py-3 text-sm font-bold text-slate-500 hover:bg-slate-100">Dodaj szczegoly</button>
+                    </div>
+                </form>
+                <p class="mt-3 text-xs font-bold leading-5 text-slate-400">Zapis ląduje w Do przypisania. Pole zostaje otwarte, żeby wrzucić kolejną myśl.</p>
             </div>
-            <button @click="toggleFab()" :class="fabOpen ? 'is-open' : ''" class="fab-main" type="button" aria-label="Szybkie akcje">+</button>
         </div>
 
         <div x-show="taskModal" x-cloak class="task-modal-backdrop fixed inset-0 z-[100] flex items-start justify-center overflow-hidden bg-slate-900/45 p-2 backdrop-blur-sm md:items-center md:p-4" @touchmove.self.prevent>
@@ -1948,130 +1984,117 @@
                     </div>
                 </div>
 
-                <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-7">
-                    <div>
-                        <label class="text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">Moduł <span class="text-rose-500">*</span></label>
-                        <select x-ref="taskModuleInput" x-model="editingTask.module_id" required :disabled="editingTask.shared_role === 'shared'" :class="taskFormError && !editingTask.module_id ? 'border-rose-400 ring-2 ring-rose-100' : ''" class="mt-1 w-full rounded-2xl border border-slate-200 bg-white p-3 text-sm font-bold outline-none transition-colors focus:border-emerald-300 disabled:cursor-not-allowed disabled:opacity-60">
-                            <option value="" disabled>Wybierz moduł</option>
-                            <template x-for="module in getTaskModuleOptions(editingTask)" :key="module.id">
-                                <option :value="String(module.id)" x-text="module.name"></option>
-                            </template>
-                        </select>
-                        <p x-show="taskFormError && !editingTask.module_id" x-cloak class="mt-1 text-[11px] font-bold leading-4 text-rose-600" x-text="taskFormError"></p>
-                        <button x-show="editingTask.shared_role !== 'shared'" x-cloak @click="addModuleForTask()" type="button" class="mt-1 text-[11px] font-bold text-emerald-700 hover:text-emerald-800">+ Utwórz moduł bez zamykania</button>
+                <div class="rounded-[24px] border border-slate-200 bg-slate-50/80 p-4">
+                    <div class="mb-2 flex items-center justify-between gap-2">
+                        <h4 class="text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">Podzadania</h4>
+                        <span class="rounded-full bg-white px-2 py-1 text-[10px] font-bold text-slate-500" x-text="(editingTask.subtasks || []).length + ' szt.'"></span>
                     </div>
-                    <div>
-                        <label class="text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">Priorytet</label>
-                        <select x-model="editingTask.priority" class="mt-1 w-full rounded-2xl border border-slate-200 bg-white p-3 text-sm font-bold outline-none transition-colors focus:border-emerald-300">
-                            <option value="">Brak priorytetu</option>
-                            <option value="P1">P1 - Pilne</option>
-                            <option value="P2">P2 - Normalne</option>
-                            <option value="P3">P3 - Spokojne</option>
-                        </select>
-                    </div>
-                    <div>
-                        <label class="text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">Czas (min)</label>
-                        <input type="number" min="1" step="5" x-model.number="editingTask.estimated_time" :disabled="(editingTask.subtasks || []).length > 0" class="mt-1 w-full rounded-2xl border border-slate-200 bg-white p-3 text-sm font-bold outline-none transition-colors focus:border-emerald-300 disabled:cursor-not-allowed disabled:opacity-60">
-                    </div>
-                    <div>
-                        <label class="text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">Waga (pkt)</label>
-                        <input type="number" min="0.1" step="0.1" x-model.number="editingTask.points_weight" :disabled="(editingTask.subtasks || []).length > 0" class="mt-1 w-full rounded-2xl border border-slate-200 bg-white p-3 text-sm font-bold outline-none transition-colors focus:border-emerald-300 disabled:cursor-not-allowed disabled:opacity-60">
-                    </div>
-                    <div>
-                        <label class="text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">Termin</label>
-                        <input type="date" x-ref="taskDueDateInput" x-model="editingTask.due_date" @change="editingTask.due_date = $event.target.value" @input="editingTask.due_date = $event.target.value" :disabled="editingTask.status === 'obserwacja'" class="mt-1 w-full rounded-2xl border border-slate-200 bg-white p-3 text-sm font-bold outline-none transition-colors focus:border-emerald-300 disabled:cursor-not-allowed disabled:opacity-50">
-                    </div>
-                    <div>
-                        <label class="text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">Godzina</label>
-                        <input type="time" x-ref="taskDueTimeInput" x-model="editingTask.due_time" @change="editingTask.due_time = $event.target.value" @input="editingTask.due_time = $event.target.value" :disabled="!editingTask.due_date || editingTask.status === 'obserwacja'" class="mt-1 w-full rounded-2xl border border-slate-200 bg-white p-3 text-sm font-bold outline-none transition-colors focus:border-emerald-300 disabled:cursor-not-allowed disabled:opacity-50">
-                    </div>
-                    <div>
-                        <label class="text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">Powiadom</label>
-                        <select x-model.number="editingTask.reminder_offset_minutes" :disabled="!editingTask.due_date || editingTask.status === 'obserwacja'" class="mt-1 w-full rounded-2xl border border-slate-200 bg-white p-3 text-sm font-bold outline-none transition-colors focus:border-emerald-300 disabled:cursor-not-allowed disabled:opacity-50">
-                            <template x-for="option in taskReminderOptions" :key="option.value">
-                                <option :value="option.value" x-text="option.label"></option>
-                            </template>
-                        </select>
-                    </div>
-                </div>
-
-                <div x-show="(editingTask.subtasks || []).length > 0" x-cloak class="mt-2 rounded-2xl border border-cyan-200 bg-cyan-50 px-3 py-2 text-xs font-bold text-cyan-800">
-                    Czas i punkty zadania sa liczone jako suma podzadan:
-                    <span x-text="getSubtasksTimeSum(editingTask.subtasks || [])"></span>
-                    <span> min • </span>
-                    <span x-text="formatScore(getSubtasksPointsSum(editingTask.subtasks || []))"></span>
-                    <span> pkt</span>
-                </div>
-
-                <div x-show="getEditingTaskProjectedMinutes().date" x-cloak class="mt-3">
-                    <div :class="getEditingTaskProjectedMinutes().over ? 'task-workload-warning' : 'task-workload-ok'" class="task-workload-notice">
-                        <div class="text-[10px] font-black uppercase tracking-[0.18em]">Obciazenie dnia</div>
-                        <div class="mt-1 text-sm font-bold" x-text="getEditingTaskWorkloadLabel()"></div>
-                        <p x-show="getEditingTaskProjectedMinutes().over" x-cloak class="mt-1 text-xs leading-5">
-                            Przekraczasz limit 8h. Przy zapisie zobaczysz ostrzezenie i mozliwosc swiadomego wyjatku.
-                        </p>
-                    </div>
-                </div>
-
-                <div class="mt-4 grid gap-4 lg:grid-cols-[0.82fr_1.18fr] xl:grid-cols-[0.78fr_1.22fr]">
-                    <div>
-                        <label class="text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">Status</label>
-                        <select x-model="editingTask.status" @change="handleEditingTaskStatusChange()" class="mt-1 w-full rounded-2xl border border-slate-200 bg-white p-3 text-sm font-bold outline-none transition-colors focus:border-emerald-300">
-                            <option value="oczekujace">Oczekujace</option>
-                            <option value="przygotowanie">Review / Hold</option>
-                            <option value="todo">Teraz robie</option>
-                            <option value="obserwacja">Watchlist — do obserwacji</option>
-                            <option value="gotowe">Gotowe</option>
-                        </select>
-                        <p x-show="editingTask.status === 'obserwacja'" x-cloak class="mt-2 rounded-xl bg-violet-50 px-3 py-2 text-xs font-bold leading-5 text-violet-700">Watchlist jest dla spraw bez konkretnego terminu. Data i godzina zostaną wyczyszczone przy zapisie.</p>
-
-                        <label class="mt-4 block text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">Notatki</label>
-                        <textarea x-model="editingTask.description" rows="5" class="mt-1 w-full rounded-[24px] border border-slate-200 bg-white p-4 text-sm leading-6 outline-none transition-colors focus:border-emerald-400" placeholder="Kontekst, kolejne kroki, blokery..."></textarea>
-
-                        <div x-show="editingTask.id" x-cloak class="mt-4 rounded-[24px] border border-fuchsia-100 bg-fuchsia-50 p-4">
-                            <div class="mb-2 flex items-center gap-2">
-                                <span class="text-lg">AI</span>
-                                <h4 class="text-[10px] font-black uppercase tracking-[0.22em] text-fuchsia-700">Shredder</h4>
+                    <p class="mb-3 text-xs leading-5 text-slate-500">Enter dodaje kolejna linie. Czas i punkty sa te same na telefonie i na kompie.</p>
+                    <div class="space-y-2">
+                        <template x-for="(subtask, index) in (editingTask.subtasks || [])" :key="subtask.id ? 'sub-' + subtask.id : 'draft-' + index">
+                            <div class="subtask-row">
+                                <input type="checkbox" :checked="subtask.done" @change="toggleEditingSubtaskDone(subtask, $event.target.checked)" class="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500" />
+                                <input x-model="subtask.title" @keydown.enter.prevent="handleSubtaskEnter(index)" class="subtask-row-title" placeholder="Podzadanie..." />
+                                <div class="subtask-row-meta">
+                                    <label>
+                                        Min
+                                        <input type="number" min="1" step="5" x-model.number="subtask.estimated_time" />
+                                    </label>
+                                    <label>
+                                        Pkt
+                                        <input type="number" min="0.1" step="0.1" x-model.number="subtask.points_weight" />
+                                    </label>
+                                    <button @click="removeEditingSubtask(index)" class="rounded-lg px-2 py-1 text-[11px] font-bold text-rose-500 transition-colors hover:bg-rose-50 hover:text-rose-700" type="button">Usun</button>
+                                </div>
+                                <div x-show="getSubtaskSourceLabel(subtask)" x-cloak class="w-full text-[10px] font-bold text-slate-400" x-text="getSubtaskSourceLabel(subtask)"></div>
                             </div>
-                            <p class="mb-3 text-xs leading-5 text-fuchsia-900/80">Rozbije zadanie na mniejsze kroki, zeby latwiej bylo ruszyc.</p>
-                            <button @click="shredTask()" class="w-full rounded-2xl bg-fuchsia-600 py-3 text-xs font-bold text-white transition-colors hover:bg-fuchsia-700" :disabled="isShredding">
-                                <span x-show="!isShredding">Rozbij na mniejsze kroki</span>
-                                <span x-show="isShredding">Pracuje... to potrwa chwile</span>
-                            </button>
-                        </div>
+                        </template>
                     </div>
+                    <button @click="addEditingSubtask()" class="mt-3 w-full rounded-2xl border border-slate-200 bg-white py-2.5 text-xs font-bold text-slate-600 transition-colors hover:bg-slate-100" type="button">+ Dodaj podzadanie</button>
+                    <div x-show="(editingTask.subtasks || []).length > 0" x-cloak class="mt-3 rounded-2xl border border-cyan-200 bg-cyan-50 px-3 py-2 text-xs font-bold text-cyan-800">
+                        Suma:
+                        <span x-text="getSubtasksTimeSum(editingTask.subtasks || [])"></span>
+                        <span> min • </span>
+                        <span x-text="formatScore(getSubtasksPointsSum(editingTask.subtasks || []))"></span>
+                        <span> pkt</span>
+                    </div>
+                </div>
 
-                    <div class="space-y-3">
-                        <div class="h-full rounded-[24px] border border-slate-200 bg-slate-50/80 p-4">
-                            <div class="mb-2 flex items-center justify-between gap-2">
-                                <h4 class="text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">Podzadania</h4>
-                                <span class="rounded-full bg-white px-2 py-1 text-[10px] font-bold text-slate-500" x-text="(editingTask.subtasks || []).length + ' szt.'"></span>
-                            </div>
-                            <p class="mb-3 text-xs leading-5 text-slate-500">Kazde podzadanie ma wlasny czas i punkty. Punkty wpadaja w dzien odhaczenia podzadania.</p>
-                            <div class="space-y-2">
-                                <template x-for="(subtask, index) in (editingTask.subtasks || [])" :key="subtask.id ? 'sub-' + subtask.id : 'draft-' + index">
-                                    <div class="rounded-xl border border-slate-200 bg-white px-2.5 py-2">
-                                        <div class="grid gap-2 md:grid-cols-[auto_minmax(0,1fr)_92px_82px_auto] md:items-center">
-                                            <input type="checkbox" :checked="subtask.done" @change="toggleEditingSubtaskDone(subtask, $event.target.checked)" class="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500" />
-                                            <div class="min-w-0">
-                                                <input x-model="subtask.title" class="w-full min-w-0 bg-transparent text-xs font-bold text-slate-700 outline-none" placeholder="Podzadanie..." />
-                                                <div x-show="getSubtaskSourceLabel(subtask)" x-cloak class="mt-0.5 text-[10px] font-bold text-slate-400" x-text="getSubtaskSourceLabel(subtask)"></div>
-                                            </div>
-                                            <label class="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[10px] font-bold text-slate-500">
-                                                Czas (min)
-                                                <input type="number" min="1" step="5" x-model.number="subtask.estimated_time" class="mt-1 w-full rounded border border-slate-200 bg-white px-2 py-1 text-xs font-bold text-slate-700 outline-none focus:border-emerald-300" />
-                                            </label>
-                                            <label class="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[10px] font-bold text-slate-500">
-                                                Punkty
-                                                <input type="number" min="0.1" step="0.1" x-model.number="subtask.points_weight" class="mt-1 w-full rounded border border-slate-200 bg-white px-2 py-1 text-xs font-bold text-slate-700 outline-none focus:border-emerald-300" />
-                                            </label>
-                                            <button @click="removeEditingSubtask(index)" class="rounded-lg px-2 py-1 text-[11px] font-bold text-rose-500 transition-colors hover:bg-rose-50 hover:text-rose-700">Usun</button>
-                                        </div>
-                                    </div>
+                <button @click="taskDetailsOpen = !taskDetailsOpen" type="button" class="mt-4 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-700 transition-colors hover:bg-slate-50">
+                    <span x-text="taskDetailsOpen ? 'Ukryj szczegoly' : 'Dodaj szczegoly'"></span>
+                </button>
+
+                <div x-show="taskDetailsOpen" x-cloak class="mt-4 space-y-4">
+                    <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                        <div>
+                            <label class="text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">Modul</label>
+                            <select x-ref="taskModuleInput" x-model="editingTask.module_id" :disabled="editingTask.shared_role === 'shared'" class="mt-1 w-full rounded-2xl border border-slate-200 bg-white p-3 text-sm font-bold outline-none transition-colors focus:border-emerald-300 disabled:cursor-not-allowed disabled:opacity-60">
+                                <option :value="getInboxModule() ? String(getInboxModule().id) : ''">Do przypisania</option>
+                                <template x-for="module in getDetailModuleOptions(editingTask)" :key="module.id">
+                                    <option :value="String(module.id)" x-text="module.name"></option>
                                 </template>
-                            </div>
-                            <button @click="addEditingSubtask()" class="mt-3 w-full rounded-2xl border border-slate-200 bg-white py-2.5 text-xs font-bold text-slate-600 transition-colors hover:bg-slate-100">+ Dodaj podzadanie</button>
+                            </select>
+                            <button x-show="editingTask.shared_role !== 'shared'" x-cloak @click="addModuleForTask()" type="button" class="mt-1 text-[11px] font-bold text-emerald-700 hover:text-emerald-800">+ Utworz modul bez zamykania</button>
                         </div>
+                        <div>
+                            <label class="text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">Priorytet</label>
+                            <select x-model="editingTask.priority" class="mt-1 w-full rounded-2xl border border-slate-200 bg-white p-3 text-sm font-bold outline-none transition-colors focus:border-emerald-300">
+                                <option value="">Brak priorytetu</option>
+                                <option value="P1">P1 - Pilne</option>
+                                <option value="P2">P2 - Normalne</option>
+                                <option value="P3">P3 - Spokojne</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">Status</label>
+                            <select x-model="editingTask.status" @change="handleEditingTaskStatusChange()" class="mt-1 w-full rounded-2xl border border-slate-200 bg-white p-3 text-sm font-bold outline-none transition-colors focus:border-emerald-300">
+                                <option value="oczekujace">Oczekujace</option>
+                                <option value="przygotowanie">Review / Hold</option>
+                                <option value="todo">Teraz robie</option>
+                                <option value="obserwacja">Watchlist — do obserwacji</option>
+                                <option value="gotowe">Gotowe</option>
+                            </select>
+                            <p x-show="editingTask.status === 'obserwacja'" x-cloak class="mt-2 rounded-xl bg-violet-50 px-3 py-2 text-xs font-bold leading-5 text-violet-700">Watchlist jest dla spraw bez konkretnego terminu. Data i godzina zostana wyczyszczone przy zapisie.</p>
+                        </div>
+                        <div>
+                            <label class="text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">Czas (min)</label>
+                            <input type="number" min="1" step="5" x-model.number="editingTask.estimated_time" :disabled="(editingTask.subtasks || []).length > 0" class="mt-1 w-full rounded-2xl border border-slate-200 bg-white p-3 text-sm font-bold outline-none transition-colors focus:border-emerald-300 disabled:cursor-not-allowed disabled:opacity-60">
+                        </div>
+                        <div>
+                            <label class="text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">Waga (pkt)</label>
+                            <input type="number" min="0.1" step="0.1" x-model.number="editingTask.points_weight" :disabled="(editingTask.subtasks || []).length > 0" class="mt-1 w-full rounded-2xl border border-slate-200 bg-white p-3 text-sm font-bold outline-none transition-colors focus:border-emerald-300 disabled:cursor-not-allowed disabled:opacity-60">
+                        </div>
+                        <div>
+                            <label class="text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">Termin</label>
+                            <input type="date" x-ref="taskDueDateInput" x-model="editingTask.due_date" @change="editingTask.due_date = $event.target.value" @input="editingTask.due_date = $event.target.value" :disabled="editingTask.status === 'obserwacja'" class="mt-1 w-full rounded-2xl border border-slate-200 bg-white p-3 text-sm font-bold outline-none transition-colors focus:border-emerald-300 disabled:cursor-not-allowed disabled:opacity-50">
+                        </div>
+                        <div>
+                            <label class="text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">Godzina</label>
+                            <input type="time" x-ref="taskDueTimeInput" x-model="editingTask.due_time" @change="editingTask.due_time = $event.target.value" @input="editingTask.due_time = $event.target.value" :disabled="!editingTask.due_date || editingTask.status === 'obserwacja'" class="mt-1 w-full rounded-2xl border border-slate-200 bg-white p-3 text-sm font-bold outline-none transition-colors focus:border-emerald-300 disabled:cursor-not-allowed disabled:opacity-50">
+                        </div>
+                        <div>
+                            <label class="text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">Powiadom</label>
+                            <select x-model.number="editingTask.reminder_offset_minutes" :disabled="!editingTask.due_date || editingTask.status === 'obserwacja'" class="mt-1 w-full rounded-2xl border border-slate-200 bg-white p-3 text-sm font-bold outline-none transition-colors focus:border-emerald-300 disabled:cursor-not-allowed disabled:opacity-50">
+                                <template x-for="option in taskReminderOptions" :key="option.value">
+                                    <option :value="option.value" x-text="option.label"></option>
+                                </template>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div x-show="getEditingTaskProjectedMinutes().date" x-cloak>
+                        <div :class="getEditingTaskProjectedMinutes().over ? 'task-workload-warning' : 'task-workload-ok'" class="task-workload-notice">
+                            <div class="text-[10px] font-black uppercase tracking-[0.18em]">Obciazenie dnia</div>
+                            <div class="mt-1 text-sm font-bold" x-text="getEditingTaskWorkloadLabel()"></div>
+                            <p x-show="getEditingTaskProjectedMinutes().over" x-cloak class="mt-1 text-xs leading-5">
+                                Przekraczasz limit 8h. Przy zapisie zobaczysz ostrzezenie i mozliwosc swiadomego wyjatku.
+                            </p>
+                        </div>
+                    </div>
+
+                    <div>
+                        <label class="block text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">Notatki</label>
+                        <textarea x-model="editingTask.description" rows="5" class="mt-1 w-full rounded-[24px] border border-slate-200 bg-white p-4 text-sm leading-6 outline-none transition-colors focus:border-emerald-400" placeholder="Kontekst, kolejne kroki, blokery..."></textarea>
                     </div>
                 </div>
 
