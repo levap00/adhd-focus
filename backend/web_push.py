@@ -23,6 +23,10 @@ WEB_PUSH_SCHEDULE_ENABLED = str(os.getenv("WEB_PUSH_SCHEDULE_ENABLED", "1")).str
     "on",
 }
 WEB_PUSH_SCHEDULE_GRACE_MINUTES = max(1, int(os.getenv("WEB_PUSH_SCHEDULE_GRACE_MINUTES", "10")))
+WEB_PUSH_OVERDUE_MIN_DELAY_MINUTES = max(
+    WEB_PUSH_SCHEDULE_GRACE_MINUTES,
+    int(os.getenv("WEB_PUSH_OVERDUE_MIN_DELAY_MINUTES", "45")),
+)
 WEB_PUSH_DEFAULT_TIMEZONE = os.getenv("WEB_PUSH_DEFAULT_TIMEZONE", "Europe/Warsaw").strip() or "Europe/Warsaw"
 VAPID_SUBJECT = os.getenv("VAPID_SUBJECT", "mailto:admin@example.com").strip() or "mailto:admin@example.com"
 
@@ -644,6 +648,11 @@ def _process_due_task_notifications(
         )
 
 
+def is_task_ready_for_overdue_reminder(delay: timedelta, window: timedelta) -> bool:
+    min_delay = timedelta(minutes=WEB_PUSH_OVERDUE_MIN_DELAY_MINUTES)
+    return min_delay < delay <= window
+
+
 def _process_task_reminders(conn, user_id: int, settings: dict[str, Any], now: datetime, tz: ZoneInfo) -> None:
     if not settings["task_reminder_enabled"]:
         return
@@ -656,7 +665,7 @@ def _process_task_reminders(conn, user_id: int, settings: dict[str, Any], now: d
         if not due_at or _task_reminder_offset_minutes(task) < 0:
             continue
         delay = now - due_at
-        if timedelta(minutes=WEB_PUSH_SCHEDULE_GRACE_MINUTES) < delay <= reminder_window:
+        if is_task_ready_for_overdue_reminder(delay, reminder_window):
             due_tasks.append(task)
     if not due_tasks:
         return

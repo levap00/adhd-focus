@@ -7,7 +7,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/app.css?v=20260824-3">
+    <link rel="stylesheet" href="/static/app.css?v=20260827-1">
     <meta name="apple-mobile-web-app-capable" content="yes">
 
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -18,7 +18,7 @@
 
     <link rel="manifest" href="/static/manifest.json">
     <script src="https://cdn.tailwindcss.com"></script>
-    <script defer src="/static/app.js?v=20260824-3"></script>
+    <script defer src="/static/app.js?v=20260827-1"></script>
     <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
 </head>
 <body x-data="app()" x-init="init()" @keydown.window="handleKeydown($event)" @resize.window="handleViewportResize()" @pointermove.window="moveCanvasDrag($event)" @pointerup.window="endCanvasDrag()" :class="[theme === 'dark' ? 'theme-dark' : 'theme-light', (taskModal || shareTaskModal || monthlyTaskModal || debtModal || quickCaptureOpen) ? 'modal-open' : '', keyboardOpen ? 'keyboard-open' : '']">
@@ -163,6 +163,13 @@
                     </div>
 
                     <div x-show="!sidebarCollapsed" x-cloak class="module-list-scroll panel-scroll space-y-3 overflow-y-auto pr-1">
+                        <button x-show="getInboxModule()" x-cloak @click="openModule(getInboxModule())" type="button" class="flex w-full items-center justify-between gap-2 rounded-[18px] border border-amber-200 bg-amber-50 px-3 py-2.5 text-left">
+                            <span>
+                                <span class="block text-[10px] font-black uppercase tracking-[0.16em] text-amber-700">Skrzynka</span>
+                                <span class="mt-0.5 block text-xs font-black text-amber-950">Do przypisania</span>
+                            </span>
+                            <span class="rounded-full bg-amber-600 px-2.5 py-1 text-[11px] font-black text-white" x-text="getInboxCount()"></span>
+                        </button>
                         <template x-for="section in getSidebarSections()" :key="section.id">
                             <div class="space-y-2">
                                 <div class="flex items-center justify-between px-1">
@@ -290,6 +297,27 @@
                             </template>
                         </section>
 
+                        <section x-show="getTodayOpenMedications().length" x-cloak class="card p-5 md:p-6">
+                            <div class="mb-4 flex items-end justify-between gap-3">
+                                <div>
+                                    <p class="text-[11px] font-black uppercase tracking-[0.22em] text-emerald-700">Leki na dzisiaj</p>
+                                    <h3 class="mt-1 text-2xl font-black text-slate-900">Odhacz dawke jednym tapnieciem</h3>
+                                </div>
+                                <button @click="navigateUtilityView('meds')" class="rounded-2xl bg-slate-100 px-4 py-2.5 text-sm font-bold text-slate-600">Wszystkie</button>
+                            </div>
+                            <div class="grid gap-2">
+                                <template x-for="med in getTodayOpenMedications()" :key="'dash-med-' + med.id">
+                                    <button type="button" @click="toggleMedicationDone(med, true)" class="meds-quick-check flex items-center justify-between gap-3 rounded-[20px] border border-emerald-200 bg-emerald-50 px-4 py-3 text-left">
+                                        <span>
+                                            <span class="block text-sm font-black text-slate-900" x-text="med.name"></span>
+                                            <span class="mt-0.5 block text-[11px] font-bold text-slate-500" x-text="med.reminder_time"></span>
+                                        </span>
+                                        <span class="rounded-full bg-emerald-600 px-3 py-1.5 text-[11px] font-black text-white">Zrobione</span>
+                                    </button>
+                                </template>
+                            </div>
+                        </section>
+
                         <div class="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
                             <section class="card dashboard-radar-card p-5 md:p-6">
                                 <div class="dashboard-section-head mb-5 flex flex-wrap items-end justify-between gap-4">
@@ -325,13 +353,16 @@
                                 </div>
                             </section>
 
-                            <section class="card dashboard-brain-card p-5 md:p-6">
+                            <section id="inbox-pile" class="card dashboard-brain-card p-5 md:p-6">
                                 <div class="dashboard-section-head mb-5 flex flex-wrap items-end justify-between gap-4">
                                     <div>
                                         <p class="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400">Do przypisania</p>
                                         <h3 class="dashboard-section-title mt-1 text-2xl font-black text-slate-900">Wrzuty, zeby nic nie ucieklo</h3>
                                     </div>
-                                    <button @click="openQuickCapture()" class="rounded-2xl bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white transition-colors hover:bg-emerald-700">+ Wrzut</button>
+                                    <div class="flex flex-wrap items-center gap-2">
+                                        <span class="rounded-full bg-amber-100 px-3 py-1.5 text-xs font-black text-amber-800" x-text="getInboxCount() + ' w skrzynce'"></span>
+                                        <button @click="openQuickCapture()" class="rounded-2xl bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white transition-colors hover:bg-emerald-700">+ Wrzut</button>
+                                    </div>
                                 </div>
 
                                 <div class="space-y-2">
@@ -1483,8 +1514,8 @@
                                 <template x-for="med in medications" :key="med.id">
                                     <article :class="med.active ? (med.scheduled_today ? 'border-slate-200 bg-slate-50/80' : 'border-slate-100 bg-white/60 opacity-75') : 'border-violet-100 bg-violet-50/50'" class="meds-list-item rounded-[22px] border p-4">
                                         <div class="flex flex-wrap items-start justify-between gap-3">
-                                            <label class="flex min-w-0 items-start gap-3 text-sm font-bold text-slate-900">
-                                                <input type="checkbox" :disabled="!med.scheduled_today" :checked="med.done" @change="toggleMedicationDone(med, $event.target.checked)" class="mt-1 h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 disabled:cursor-not-allowed disabled:opacity-40" />
+                                            <button type="button" :disabled="!med.scheduled_today" @click="toggleMedicationDone(med, !med.done)" class="meds-check-hit flex min-w-0 flex-1 items-start gap-3 text-left disabled:cursor-not-allowed disabled:opacity-40">
+                                                <span :class="med.done ? 'bg-emerald-500 border-emerald-500' : 'bg-white border-slate-300'" class="mt-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border-2 text-sm font-black text-white" x-text="med.done ? '✓' : ''"></span>
                                                 <span class="min-w-0">
                                                     <span class="block text-base font-black" :class="med.done ? 'line-through text-slate-400' : ''" x-text="med.name"></span>
                                                     <span class="mt-1 flex flex-wrap items-center gap-2">
@@ -1493,7 +1524,7 @@
                                                         <span :class="getMedicationStatusClass(med)" class="rounded-full px-2.5 py-1 text-[11px] font-bold" x-text="getMedicationStatusLabel(med)"></span>
                                                     </span>
                                                 </span>
-                                            </label>
+                                            </button>
                                             <div class="flex shrink-0 flex-wrap gap-2">
                                                 <button @click="editMedication(med)" class="rounded-xl border border-cyan-200 bg-cyan-50 px-3 py-1.5 text-xs font-bold text-cyan-700 transition-colors hover:bg-cyan-100">Edytuj</button>
                                                 <button @click="toggleMedicationActive(med)" :class="med.active ? 'border-amber-200 bg-amber-50 text-amber-700' : 'border-emerald-200 bg-emerald-50 text-emerald-700'" class="rounded-xl border px-3 py-1.5 text-xs font-bold transition-colors" x-text="med.active ? 'Wstrzymaj' : 'Wznów'"></button>
@@ -1649,7 +1680,7 @@
                                                 <input type="checkbox" x-model="notificationSettings.task_reminder_enabled" :disabled="!notificationSettings.enabled" class="notification-checkbox" />
                                                 <span>
                                                     <span class="notification-control-title">Zbiorcze przypomnienia po terminie</span>
-                                                    <span class="notification-control-copy">To były wiadomości wracające co 2 godziny. Teraz możesz je wyłączyć lub ograniczyć.</span>
+                                                    <span class="notification-control-copy">Pierwsze przychodzi dopiero 45 min po godzinie, zeby nie dublowac alarmu „Czas na zadanie”.</span>
                                                 </span>
                                             </label>
                                             <div class="notification-field-grid mt-3">
@@ -1974,10 +2005,16 @@
             </main>
         </div>
 
+        <button x-show="getInboxCount() > 0" x-cloak type="button" class="inbox-dock" @click="openInboxPile()">
+            <span>Do przypisania</span>
+            <span class="inbox-dock-count" x-text="getInboxCount()"></span>
+        </button>
+
         <nav class="bottom-nav" aria-label="Główna nawigacja">
             <button @click="navigateMainView('dash')" :class="view === 'dash' ? 'is-active' : ''" :aria-current="view === 'dash' ? 'page' : null" class="bottom-nav-btn" type="button">
                 <span class="bottom-nav-icon">⌂</span>
                 <span>Pulpit</span>
+                <span x-show="getInboxCount() > 0" x-cloak class="bottom-nav-badge" x-text="getInboxCount()"></span>
             </button>
             <button @click="navigateMainView('kanban')" :class="view === 'kanban' ? 'is-active' : ''" :aria-current="view === 'kanban' ? 'page' : null" class="bottom-nav-btn" type="button">
                 <span class="bottom-nav-icon">□</span>
@@ -2047,8 +2084,12 @@
                                 <input x-model="subtask.title" @keydown.enter.prevent="handleSubtaskEnter(index)" class="subtask-row-title" placeholder="Podzadanie..." />
                                 <div class="subtask-row-meta">
                                     <label>
+                                        Godz
+                                        <input type="number" min="0" max="12" step="1" :value="getDurationHours(subtask.estimated_time)" @input="setEditingSubtaskDuration(subtask, 'hours', $event.target.value)" />
+                                    </label>
+                                    <label>
                                         Min
-                                        <input type="number" min="1" step="5" x-model.number="subtask.estimated_time" />
+                                        <input type="number" min="0" max="59" step="5" :value="getDurationRemainMinutes(subtask.estimated_time)" @input="setEditingSubtaskDuration(subtask, 'minutes', $event.target.value)" />
                                     </label>
                                     <label>
                                         Pkt
@@ -2063,8 +2104,8 @@
                     <button @click="addEditingSubtask()" class="mt-3 w-full rounded-2xl border border-slate-200 bg-white py-2.5 text-xs font-bold text-slate-600 transition-colors hover:bg-slate-100" type="button">+ Dodaj podzadanie</button>
                     <div x-show="(editingTask.subtasks || []).length > 0" x-cloak class="mt-3 rounded-2xl border border-cyan-200 bg-cyan-50 px-3 py-2 text-xs font-bold text-cyan-800">
                         Suma:
-                        <span x-text="getSubtasksTimeSum(editingTask.subtasks || [])"></span>
-                        <span> min • </span>
+                        <span x-text="formatDurationMinutes(getSubtasksTimeSum(editingTask.subtasks || []))"></span>
+                        <span> • </span>
                         <span x-text="formatScore(getSubtasksPointsSum(editingTask.subtasks || []))"></span>
                         <span> pkt</span>
                     </div>
@@ -2107,8 +2148,17 @@
                             <p x-show="editingTask.status === 'obserwacja'" x-cloak class="mt-2 rounded-xl bg-violet-50 px-3 py-2 text-xs font-bold leading-5 text-violet-700">Watchlist jest dla spraw bez konkretnego terminu. Data i godzina zostana wyczyszczone przy zapisie.</p>
                         </div>
                         <div>
-                            <label class="text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">Czas (min)</label>
-                            <input type="number" min="1" step="5" x-model.number="editingTask.estimated_time" :disabled="(editingTask.subtasks || []).length > 0" class="mt-1 w-full rounded-2xl border border-slate-200 bg-white p-3 text-sm font-bold outline-none transition-colors focus:border-emerald-300 disabled:cursor-not-allowed disabled:opacity-60">
+                            <label class="text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">Czas</label>
+                            <div class="mt-1 grid grid-cols-2 gap-2">
+                                <label class="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-[10px] font-black uppercase tracking-[0.14em] text-slate-400">
+                                    Godz
+                                    <input type="number" min="0" max="12" step="1" :value="getDurationHours(editingTask.estimated_time)" @input="setEditingTaskDuration('hours', $event.target.value)" :disabled="(editingTask.subtasks || []).length > 0" class="mt-1 w-full bg-transparent text-sm font-bold text-slate-900 outline-none disabled:cursor-not-allowed disabled:opacity-60">
+                                </label>
+                                <label class="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-[10px] font-black uppercase tracking-[0.14em] text-slate-400">
+                                    Min
+                                    <input type="number" min="0" max="59" step="5" :value="getDurationRemainMinutes(editingTask.estimated_time)" @input="setEditingTaskDuration('minutes', $event.target.value)" :disabled="(editingTask.subtasks || []).length > 0" class="mt-1 w-full bg-transparent text-sm font-bold text-slate-900 outline-none disabled:cursor-not-allowed disabled:opacity-60">
+                                </label>
+                            </div>
                         </div>
                         <div>
                             <label class="text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">Waga (pkt)</label>

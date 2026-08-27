@@ -458,6 +458,67 @@ body.keyboard-open .fab-speed-dial {
     border-color: #0f172a;
 }
 
+.bottom-nav-badge {
+    position: absolute;
+    top: 0.18rem;
+    right: calc(50% - 1.55rem);
+    min-width: 1.05rem;
+    border-radius: 999px;
+    background: #d97706;
+    padding: 0.05rem 0.32rem;
+    color: #fff;
+    font-size: 9px;
+    font-weight: 900;
+    line-height: 1.2;
+}
+
+.bottom-nav-btn {
+    position: relative;
+}
+
+.inbox-dock {
+    position: fixed;
+    left: max(0.7rem, env(safe-area-inset-left));
+    bottom: calc(var(--bottom-nav-height) + 0.7rem);
+    z-index: 89;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.65rem;
+    border: 1px solid rgba(217, 119, 6, 0.35);
+    border-radius: 999px;
+    background: rgba(255, 251, 235, 0.96);
+    padding: 0.55rem 0.7rem 0.55rem 0.95rem;
+    color: #92400e;
+    font-size: 0.78rem;
+    font-weight: 900;
+    box-shadow: 0 12px 28px rgba(15, 23, 42, 0.16);
+}
+
+.inbox-dock-count {
+    min-width: 1.45rem;
+    border-radius: 999px;
+    background: #d97706;
+    padding: 0.18rem 0.45rem;
+    color: #fff;
+    text-align: center;
+}
+
+.meds-check-hit,
+.meds-quick-check {
+    min-height: 3.1rem;
+}
+
+body.theme-dark .inbox-dock {
+    background: rgba(120, 53, 15, 0.92);
+    border-color: rgba(252, 211, 77, 0.35);
+    color: #fde68a;
+}
+
+body.keyboard-open .inbox-dock,
+body.modal-open .inbox-dock {
+    display: none !important;
+}
+
 .fab-speed-dial {
     position: fixed;
     right: 1rem;
@@ -2920,7 +2981,8 @@ body.theme-dark button.bg-slate-900 {
     }
 
     .bottom-nav,
-    .fab-speed-dial {
+    .fab-speed-dial,
+    .inbox-dock {
         display: none;
     }
 }
