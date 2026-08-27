@@ -758,8 +758,8 @@
 
                 getSidebarSections() {
                     return [
-                        { id: 'praca', label: 'Praca', modules: this.getModulesByCategory('praca') },
-                        { id: 'prywatne', label: 'Prywatne', modules: this.getModulesByCategory('prywatne') }
+                        { id: 'praca', label: 'Praca', modules: this.getModulesByCategory('praca').filter(module => !this.isInboxModule(module)) },
+                        { id: 'prywatne', label: 'Prywatne', modules: this.getModulesByCategory('prywatne').filter(module => !this.isInboxModule(module)) }
                     ];
                 },
 
@@ -4277,7 +4277,11 @@
                 },
 
                 getInboxModule() {
-                    return this.modules.find(module => (module.name || '').trim().toLowerCase() === 'do przypisania') || null;
+                    return this.modules.find(module => this.isInboxModule(module)) || null;
+                },
+
+                isInboxModule(module) {
+                    return (module?.name || '').trim().toLowerCase() === 'do przypisania';
                 },
 
                 getInboxTasks(limit = 8) {
@@ -4287,7 +4291,52 @@
                         Number(task.module_id) === Number(inbox.id) &&
                         this.normalizeTaskStatus(task.status) !== 'gotowe'
                     ));
-                    return items.slice(0, limit);
+                    return typeof limit === 'number' ? items.slice(0, limit) : items;
+                },
+
+                getInboxCount() {
+                    return this.getInboxTasks(null).length;
+                },
+
+                openInboxPile() {
+                    this.navigateMainView('dash');
+                    this.$nextTick(() => {
+                        const pile = document.getElementById('inbox-pile');
+                        if (pile) pile.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    });
+                },
+
+                getTodayOpenMedications() {
+                    return (this.medications || []).filter(med => med.active && med.scheduled_today && !med.done);
+                },
+
+                getDurationHours(minutes) {
+                    return Math.floor(this.normalizeEstimatedMinutes(minutes) / 60);
+                },
+
+                getDurationRemainMinutes(minutes) {
+                    return this.normalizeEstimatedMinutes(minutes) % 60;
+                },
+
+                setEditingTaskDuration(part, value) {
+                    const hours = part === 'hours'
+                        ? Math.max(0, Math.round(Number(value) || 0))
+                        : this.getDurationHours(this.editingTask?.estimated_time);
+                    const mins = part === 'minutes'
+                        ? Math.max(0, Math.min(59, Math.round(Number(value) || 0)))
+                        : this.getDurationRemainMinutes(this.editingTask?.estimated_time);
+                    this.editingTask.estimated_time = Math.max(0, (hours * 60) + mins);
+                },
+
+                setEditingSubtaskDuration(subtask, part, value) {
+                    if (!subtask) return;
+                    const hours = part === 'hours'
+                        ? Math.max(0, Math.round(Number(value) || 0))
+                        : this.getDurationHours(subtask.estimated_time);
+                    const mins = part === 'minutes'
+                        ? Math.max(0, Math.min(59, Math.round(Number(value) || 0)))
+                        : this.getDurationRemainMinutes(subtask.estimated_time);
+                    subtask.estimated_time = Math.max(0, (hours * 60) + mins);
                 },
 
                 getVisibleCardSubtasks(task, limit = 4) {
