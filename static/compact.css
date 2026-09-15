@@ -1,5 +1,35 @@
 /* Compact phone UI overrides — load after app.css */
 
+.flow-card h2 {
+    overflow-wrap: anywhere;
+}
+
+.flow-card button,
+.flow-settings select,
+.flow-break-reminder button {
+    min-height: 44px;
+}
+
+.flow-card button:disabled {
+    opacity: 0.55;
+    cursor: wait;
+}
+
+.flow-break-reminder {
+    flex-direction: column;
+    align-items: stretch;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+}
+
+.flow-break-reminder .calm-toast-actions {
+    flex-wrap: wrap;
+}
+
+.flow-break-reminder button {
+    flex: 1 1 8rem;
+}
+
 .task-modal-backdrop {
     touch-action: pan-y;
 }

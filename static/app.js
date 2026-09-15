@@ -100,6 +100,14 @@
                 API: '',
                 flowTask: null,
                 flowTimer: 0,
+                flowEndsAt: 0,
+                flowClockNow: 0,
+                flowPaused: false,
+                flowStarting: false,
+                flowCompleting: false,
+                flowBreakMinutes: 60,
+                flowBreakDueAt: 0,
+                flowBreakPending: false,
                 timerInterval: null,
                 isShredding: false,
                 brainDumpNotes: [],
@@ -516,6 +524,7 @@
                         this.globalLaneCollapsed = parsed.globalLaneCollapsed && typeof parsed.globalLaneCollapsed === 'object' ? parsed.globalLaneCollapsed : this.globalLaneCollapsed;
                         this.mutedModuleIds = Array.isArray(parsed.mutedModuleIds) ? parsed.mutedModuleIds.map(Number).filter(Number.isFinite) : this.mutedModuleIds;
                         this.dailyGoal = Number.isFinite(Number(parsed.dailyGoal)) && Number(parsed.dailyGoal) > 0 ? Number(parsed.dailyGoal) : this.dailyGoal;
+                        this.flowBreakMinutes = this.normalizeFlowBreakMinutes(parsed.flowBreakMinutes);
                     } catch (error) {
                         /* ignore broken local settings */
                     }
@@ -531,6 +540,7 @@
                             globalLaneCollapsed: this.globalLaneCollapsed,
                             mutedModuleIds: this.mutedModuleIds,
                             dailyGoal: this.dailyGoal,
+                            flowBreakMinutes: this.flowBreakMinutes,
                             dopamineWeekOffset: this.dopamineWeekOffset
                         }));
                     } catch (error) {
@@ -3774,7 +3784,7 @@
                 },
 
                 async changeTaskStatus(task, nextStatus) {
-                    if (!task) return;
+                    if (!task) return false;
                     const payload = { status: nextStatus };
                     if (nextStatus === 'gotowe') {
                         payload.description = this.buildDoneDescription(task.description);
@@ -3794,8 +3804,13 @@
                             }));
                         }
                     }
-                    await this.patchTask(task.id, payload);
+                    const response = await this.patchTask(task.id, payload);
+                    if (!response.ok) {
+                        this.showToast(await this.getApiErrorMessage(response, 'Nie udało się zmienić statusu zadania.'));
+                        return false;
+                    }
                     await this.init();
+                    return true;
                 },
 
                 openModule(module) {
@@ -6209,45 +6224,137 @@
                     return `${Math.floor(seconds / 60).toString().padStart(2, '0')}:${(seconds % 60).toString().padStart(2, '0')}`;
                 },
 
+                normalizeFlowBreakMinutes(value) {
+                    const minutes = Number(value);
+                    return [0, 50, 60, 90].includes(minutes) && value !== null && value !== '' ? minutes : 60;
+                },
+
+                setFlowBreakMinutes(value) {
+                    this.flowBreakMinutes = this.normalizeFlowBreakMinutes(value);
+                    this.flowBreakPending = false;
+                    this.scheduleFlowBreak();
+                    this.saveUIPreferences();
+                },
+
+                scheduleFlowBreak(now = Date.now()) {
+                    this.flowClockNow = now;
+                    this.flowBreakDueAt = this.flowTask && !this.flowPaused && this.flowBreakMinutes > 0
+                        ? now + this.flowBreakMinutes * 60000
+                        : 0;
+                },
+
+                syncFlowClock() {
+                    if (!this.flowTask || this.flowPaused) return;
+                    const now = Date.now();
+                    this.flowClockNow = now;
+                    // Use elapsed time: background tabs and sleeping phones can skip interval ticks.
+                    this.flowTimer = Math.max(0, Math.ceil((this.flowEndsAt - now) / 1000));
+                    if (this.flowBreakDueAt && now >= this.flowBreakDueAt) {
+                        this.flowBreakPending = true;
+                    }
+                },
+
+                getFlowBreakLabel() {
+                    if (this.flowPaused) return 'Przerwa trwa. Wróć, kiedy będziesz gotowy.';
+                    if (!this.flowBreakMinutes) return 'Przypomnienia o przerwie wyłączone.';
+                    if (this.flowBreakPending) return 'Czas na chwilę przerwy.';
+                    const minutes = Math.max(1, Math.ceil((this.flowBreakDueAt - this.flowClockNow) / 60000));
+                    return `Przypomnienie o przerwie za ${minutes} min.`;
+                },
+
+                snoozeFlowBreak() {
+                    if (!this.flowTask || this.flowPaused || !this.flowBreakPending) return;
+                    this.flowClockNow = Date.now();
+                    this.flowBreakDueAt = this.flowClockNow + 15 * 60000;
+                    this.flowBreakPending = false;
+                },
+
+                pauseFlow() {
+                    if (!this.flowTask || this.flowPaused || this.flowCompleting) return;
+                    this.syncFlowClock();
+                    this.flowPaused = true;
+                    this.flowEndsAt = 0;
+                    this.flowBreakDueAt = 0;
+                    this.flowBreakPending = false;
+                    this.closeOverlayMenus();
+                    this.view = 'flow';
+                },
+
+                resumeFlow() {
+                    if (!this.flowTask || !this.flowPaused || this.flowCompleting) return;
+                    const now = Date.now();
+                    this.flowPaused = false;
+                    this.flowEndsAt = now + this.flowTimer * 1000;
+                    this.scheduleFlowBreak(now);
+                },
+
                 clearFlowState() {
                     clearInterval(this.timerInterval);
                     this.timerInterval = null;
                     this.flowTask = null;
                     this.flowTimer = 0;
+                    this.flowEndsAt = 0;
+                    this.flowClockNow = 0;
+                    this.flowPaused = false;
+                    this.flowBreakDueAt = 0;
+                    this.flowBreakPending = false;
                 },
 
                 async startFlow() {
+                    if (this.flowTask) {
+                        this.syncFlowClock();
+                        this.view = 'flow';
+                        return;
+                    }
+                    if (this.flowStarting) return;
                     const candidate = this.getFocusTask();
                     if (!candidate) {
                         this.showToast('Najpierw dodaj zadanie do planera.');
                         return;
                     }
 
-                    let task = candidate;
-                    if (task.status !== 'todo') {
-                        await this.changeTaskStatus(task, 'todo');
-                        task = this.getTaskById(task.id) || { ...task, status: 'todo' };
-                    }
+                    this.flowStarting = true;
+                    try {
+                        let task = candidate;
+                        if (task.status !== 'todo') {
+                            if (!await this.changeTaskStatus(task, 'todo')) return;
+                            task = this.getTaskById(task.id) || { ...task, status: 'todo' };
+                        }
 
-                    this.flowTask = task;
-                    this.flowTimer = (task.estimated_time || 15) * 60;
-                    clearInterval(this.timerInterval);
-                    this.timerInterval = setInterval(() => {
-                        if (this.flowTimer > 0) this.flowTimer--;
-                    }, 1000);
-                    this.view = 'flow';
+                        const now = Date.now();
+                        this.flowTask = task;
+                        this.flowPaused = false;
+                        this.flowBreakPending = false;
+                        this.flowTimer = (task.estimated_time || 15) * 60;
+                        this.flowEndsAt = now + this.flowTimer * 1000;
+                        this.scheduleFlowBreak(now);
+                        clearInterval(this.timerInterval);
+                        this.timerInterval = setInterval(() => this.syncFlowClock(), 1000);
+                        this.view = 'flow';
+                    } catch (error) {
+                        this.showToast('Nie udało się uruchomić focusa. Sprawdź połączenie i spróbuj ponownie.');
+                    } finally {
+                        this.flowStarting = false;
+                    }
                 },
 
                 async completeFlowTask() {
+                    if (!this.flowTask || this.flowCompleting) return;
                     const currentTask = this.flowTask;
-                    this.clearFlowState();
-                    if (currentTask) {
-                        await this.changeTaskStatus(currentTask, 'gotowe');
+                    this.flowCompleting = true;
+                    try {
+                        if (!await this.changeTaskStatus(currentTask, 'gotowe')) return;
+                        this.clearFlowState();
+                        this.view = this.activeModule ? 'kanban' : 'dash';
+                    } catch (error) {
+                        this.showToast('Nie udało się zapisać ukończenia. Sprawdź połączenie i spróbuj ponownie.');
+                    } finally {
+                        this.flowCompleting = false;
                     }
-                    this.view = this.activeModule ? 'kanban' : 'dash';
                 },
 
                 skipFlowTask() {
+                    if (this.flowCompleting) return;
                     this.clearFlowState();
                     this.view = this.activeModule ? 'kanban' : 'dash';
                 },
