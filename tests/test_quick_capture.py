@@ -68,3 +68,28 @@ def test_subtask_defaults_time_and_points():
     assert task["subtasks"][0]["points_weight"] == 1
     assert task["estimated_time"] == 30
     assert task["points_weight"] == 2
+
+
+def test_subtask_reordering_preserves_completion_and_durations():
+    client = fresh_client()
+    login(client)
+    created = client.post("/tasks", json={
+        "name": "kolejnosc krokow",
+        "subtasks": [
+            {"title": "Powtorzona nazwa", "estimated_time": 135, "points_weight": 2},
+            {"title": "Zrobione", "done": True, "done_at": "2026-01-01T12:00:00Z"},
+            {"title": "Powtorzona nazwa", "estimated_time": 37, "points_weight": 3},
+        ],
+    })
+    assert created.status_code == 200, created.text
+    task_id = created.json()["id"]
+    task = next(item for item in client.get("/tasks").json() if item["id"] == task_id)
+    steps = task["subtasks"]
+    reordered = [steps[2], steps[1], steps[0]]
+    saved = client.put(f"/tasks/{task_id}", json={"subtasks": reordered})
+    assert saved.status_code == 200, saved.text
+    loaded = next(item for item in client.get("/tasks").json() if item["id"] == task_id)
+    assert [item["estimated_time"] for item in loaded["subtasks"]] == [37, 15, 135]
+    assert loaded["subtasks"][1]["done"]
+    assert loaded["subtasks"][1]["done_at"] == steps[1]["done_at"]
+    assert loaded["estimated_time"] == 187
