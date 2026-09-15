@@ -9,6 +9,7 @@
         ctx.doneSubtasksExpanded = false;
         ctx.cardDoneExpanded = ctx.cardDoneExpanded || {};
         ctx.pendingHideKeys = ctx.pendingHideKeys || {};
+        ctx.ignoreTaskModalAway = false;
 
         ctx.getSubtaskUiKey = function(taskId, subtask, index) {
             const idPart = subtask?.id ? `id-${subtask.id}` : `ix-${index}-${subtask?.title || ""}`;
@@ -82,6 +83,20 @@
             return visible.slice(0, limit);
         };
 
+        ctx.armTaskModalAwayGuard = function() {
+            this.ignoreTaskModalAway = true;
+            window.clearTimeout(this._taskModalAwayTimer);
+            this._taskModalAwayTimer = window.setTimeout(() => {
+                this.ignoreTaskModalAway = false;
+            }, 250);
+        };
+
+        ctx.closeTaskModalFromAway = function() {
+            if (this.ignoreTaskModalAway) return;
+            this.taskModal = false;
+            this.isCreatingTask = false;
+        };
+
         const originalToggleEdit = ctx.toggleEditingSubtaskDone?.bind(ctx);
         ctx.toggleEditingSubtaskDone = function(subtask, checked) {
             if (originalToggleEdit) originalToggleEdit(subtask, checked);
@@ -112,15 +127,31 @@
 
         const originalOpen = ctx.openTaskModal?.bind(ctx);
         ctx.openTaskModal = function(task) {
+            this.armTaskModalAwayGuard();
             if (originalOpen) originalOpen(task);
-            if (this.detectMobileLayout()) this.taskDetailsOpen = false;
             this.doneSubtasksExpanded = false;
         };
 
         const originalNew = ctx.openNewTaskModal?.bind(ctx);
         ctx.openNewTaskModal = function(preferredModuleId = null) {
+            this.armTaskModalAwayGuard();
             if (originalNew) originalNew(preferredModuleId);
             this.doneSubtasksExpanded = false;
+        };
+
+        ctx.openDetailsFromQuickCapture = function() {
+            const name = (this.quickCaptureText || "").trim();
+            this.closeQuickCapture();
+            this.armTaskModalAwayGuard();
+            this.$nextTick(() => {
+                window.setTimeout(() => {
+                    if (originalNew) originalNew();
+                    else this.openNewTaskModal();
+                    if (name) this.editingTask.name = name;
+                    this.taskDetailsOpen = true;
+                    this.armTaskModalAwayGuard();
+                }, 30);
+            });
         };
 
         return ctx;
