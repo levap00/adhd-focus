@@ -1,1 +1,4 @@
-PLACEHOLDER
+:root {
+    --bottom-nav-height: calc(4.25rem + env(safe-area-inset-bottom));
+    color-scheme: light;
+}
