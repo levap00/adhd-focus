@@ -8,6 +8,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/app.css?v=20260827-1">
+    <link rel="stylesheet" href="/static/compact.css?v=20260915-1">
     <meta name="apple-mobile-web-app-capable" content="yes">
 
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -19,6 +20,7 @@
     <link rel="manifest" href="/static/manifest.json">
     <script src="https://cdn.tailwindcss.com"></script>
     <script defer src="/static/app.js?v=20260827-1"></script>
+    <script defer src="/static/compact-ui.js?v=20260915-2"></script>
     <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
 </head>
 <body x-data="app()" x-init="init()" @keydown.window="handleKeydown($event)" @resize.window="handleViewportResize()" @pointermove.window="moveCanvasDrag($event)" @pointerup.window="endCanvasDrag()" :class="[theme === 'dark' ? 'theme-dark' : 'theme-light', (taskModal || shareTaskModal || monthlyTaskModal || debtModal || quickCaptureOpen) ? 'modal-open' : '', keyboardOpen ? 'keyboard-open' : '']">
@@ -2061,7 +2063,7 @@
         </div>
 
         <div x-show="taskModal" x-cloak class="task-modal-backdrop fixed inset-0 z-[100] flex items-start justify-center overflow-hidden bg-slate-900/45 p-2 backdrop-blur-sm md:items-center md:p-4" @touchmove.self.prevent>
-            <div class="card task-modal-surface relative w-full max-w-6xl max-h-[94vh] overflow-y-auto p-4 md:p-7" @click.away="taskModal = false; isCreatingTask = false" @touchmove.stop @wheel.stop>
+            <div class="card task-modal-surface relative w-full max-w-6xl max-h-[94vh] overflow-y-auto p-4 md:p-7" @click.away="closeTaskModalFromAway()" @touchmove.stop @wheel.stop>
                 <div class="mb-4 border-b border-slate-200/80 pb-4">
                     <p class="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400" x-text="isCreatingTask ? 'Nowe zadanie' : 'Edycja zadania'"></p>
                     <input x-model="editingTask.name" class="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-xl font-black text-slate-900 outline-none transition-colors focus:border-emerald-400 md:text-[2rem]" placeholder="Nazwa zadania">
