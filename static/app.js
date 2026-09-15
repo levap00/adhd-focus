@@ -46,11 +46,19 @@
                 zoomGuardsInstalled: false,
                 viewportGuardsInstalled: false,
                 keyboardOpen: false,
+                taskViewportHeight: null,
+                taskViewportTop: 0,
                 fabOpen: false,
                 quickCaptureOpen: false,
                 quickCaptureText: '',
                 quickCaptureSaving: false,
                 taskDetailsOpen: false,
+                doneSubtasksExpanded: false,
+                cardDoneExpanded: {},
+                cardSubtaskSaving: {},
+                subtaskUiTick: 0,
+                subtaskUiSequence: 0,
+                subtaskHideTimer: null,
                 sidebarCollapsed: false,
                 focusFilter: 'all',
                 dopamineWeekOffset: 0,
@@ -276,6 +284,8 @@
                     if (typeof window === 'undefined' || typeof document === 'undefined') return;
                     if (!window.matchMedia('(max-width: 767px)').matches) {
                         this.keyboardOpen = false;
+                        this.taskViewportHeight = null;
+                        this.taskViewportTop = 0;
                         return;
                     }
                     const active = document.activeElement;
@@ -283,6 +293,8 @@
                         active.matches?.('input, textarea, select, [contenteditable="true"]')
                     );
                     const viewport = window.visualViewport;
+                    this.taskViewportHeight = Math.round(viewport?.height || window.innerHeight);
+                    this.taskViewportTop = Math.round(viewport?.offsetTop || 0);
                     const viewportReduced = !!viewport && (window.innerHeight - viewport.height) > 120;
                     this.keyboardOpen = formFieldFocused || viewportReduced;
                 },
@@ -584,6 +596,7 @@
                 },
 
                 openDetailsFromQuickCapture() {
+                    if (this.quickCaptureSaving) return;
                     const name = (this.quickCaptureText || '').trim();
                     this.closeQuickCapture();
                     this.openNewTaskModal();
@@ -857,6 +870,7 @@
                 createSubtaskDraft(title = '') {
                     return {
                         id: null,
+                        _uiKey: `draft-${++this.subtaskUiSequence}`,
                         title: title || '',
                         done: false,
                         estimated_time: 15,
@@ -987,6 +1001,7 @@
                             : [],
                         subtasks: this.normalizeSubtasks(task.subtasks)
                     }));
+                    this.scheduleSubtaskHideRefresh();
                     this.hydrateCanvasTaskNodes();
                 },
 
@@ -3711,7 +3726,7 @@
                 },
 
                 async patchTask(taskId, payload) {
-                    await fetch(`${this.API}/tasks/${taskId}`, {
+                    return fetch(`${this.API}/tasks/${taskId}`, {
                         method: 'PUT',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(payload)
@@ -4109,8 +4124,7 @@
                     }
                     if (event.key === 'Escape' && this.taskModal) {
                         event.preventDefault();
-                        this.taskModal = false;
-                        this.isCreatingTask = false;
+                        this.closeTaskModal();
                         return;
                     }
                     if (event.key === 'Escape' && (this.settingsMenuOpen || this.fabOpen)) {
@@ -4156,6 +4170,7 @@
                     this.isCreatingTask = true;
                     this.taskFormError = '';
                     this.taskDetailsOpen = false;
+                    this.doneSubtasksExpanded = false;
                     const assignableModules = this.getAssignableModules();
                     const preferredId = this.normalizeOptionalId(preferredModuleId);
                     const preferredModule = assignableModules.find(module => Number(module.id) === Number(preferredId));
@@ -4182,7 +4197,8 @@
                 openTaskModal(task) {
                     this.isCreatingTask = false;
                     this.taskFormError = '';
-                    this.taskDetailsOpen = true;
+                    this.taskDetailsOpen = !window.matchMedia('(max-width: 767px)').matches;
+                    this.doneSubtasksExpanded = false;
                     const baseSubtasks = this.normalizeSubtasks(task?.subtasks);
                     const needsLegacySubtaskDefaults = baseSubtasks.length > 0 && (
                         !this.hasConfiguredSubtaskTimes(baseSubtasks) || !this.hasConfiguredSubtaskPoints(baseSubtasks)
@@ -4224,9 +4240,28 @@
                         points_weight: effectivePoints,
                         due_time: this.sanitizeDueTime(task?.due_time, ''),
                         reminder_offset_minutes: this.normalizeReminderOffsetMinutes(task?.reminder_offset_minutes),
-                        subtasks: normalizedSubtasks
+                        subtasks: normalizedSubtasks.map(subtask => ({
+                            ...subtask,
+                            _uiKey: `edit-${++this.subtaskUiSequence}`
+                        }))
                     };
                     this.taskModal = true;
+                    this.scheduleSubtaskHideRefresh();
+                },
+
+                closeTaskModal() {
+                    this.taskModal = false;
+                    this.isCreatingTask = false;
+                    this.doneSubtasksExpanded = false;
+                },
+
+                showTaskDetails(field = '') {
+                    this.taskDetailsOpen = true;
+                    this.$nextTick(() => {
+                        const input = this.$refs?.[field];
+                        input?.scrollIntoView({ block: 'nearest' });
+                        input?.focus({ preventScroll: true });
+                    });
                 },
 
                 handleEditingTaskStatusChange() {
@@ -4240,24 +4275,26 @@
                     const current = Array.isArray(this.editingTask?.subtasks) ? this.editingTask.subtasks : [];
                     this.editingTask.subtasks = [...current, this.createSubtaskDraft('')];
                     this.$nextTick(() => {
-                        const fields = document.querySelectorAll('.subtask-row-title');
+                        const fields = document.querySelectorAll('.editing-subtasks-active .subtask-row-title');
                         const last = fields[fields.length - 1];
                         if (last) last.focus();
                     });
                 },
 
                 handleSubtaskEnter(index) {
-                    const current = Array.isArray(this.editingTask?.subtasks) ? this.editingTask.subtasks : [];
-                    if (index >= current.length - 1) {
+                    const visible = this.getEditingSubtaskEntries(false);
+                    if (index === visible[visible.length - 1]?.index) {
                         this.addEditingSubtask();
                     }
                 },
 
                 async toggleCardSubtask(task, subtask, checked) {
-                    if (!task || !subtask) return;
+                    if (!task || !subtask || this.cardSubtaskSaving[task.id]) return;
+                    const previousSubtasks = task.subtasks;
                     const nextSubtasks = this.normalizeSubtasks(task.subtasks).map(item => {
-                        const isMatch = (item.id && subtask.id && Number(item.id) === Number(subtask.id))
-                            || item.title === subtask.title;
+                        const isMatch = subtask.id
+                            ? Number(item.id) === Number(subtask.id)
+                            : item.position === subtask.position;
                         if (!isMatch) return item;
                         return {
                             ...item,
@@ -4265,14 +4302,19 @@
                             done_at: checked ? new Date().toISOString() : ''
                         };
                     });
+                    this.cardSubtaskSaving[task.id] = true;
                     task.subtasks = nextSubtasks;
+                    this.scheduleSubtaskHideRefresh();
                     try {
                         const payload = this.pickTaskPayload({ ...task, subtasks: nextSubtasks });
-                        await this.patchTask(task.id, payload);
+                        const response = await this.patchTask(task.id, payload);
+                        if (!response.ok) throw new Error('Subtask update failed');
                         await this.loadAllTasks();
                     } catch (error) {
+                        task.subtasks = previousSubtasks;
                         this.showToast('Nie udalo sie odhaczyc podzadania.');
-                        await this.loadAllTasks();
+                    } finally {
+                        delete this.cardSubtaskSaving[task.id];
                     }
                 },
 
@@ -4339,8 +4381,63 @@
                     subtask.estimated_time = Math.max(0, (hours * 60) + mins);
                 },
 
+                isSubtaskRecentlyDone(subtask) {
+                    // Read by Alpine so the timer invalidates the filtered lists.
+                    this.subtaskUiTick;
+                    return !!subtask?.done && Date.parse(subtask.done_at || '') + 3000 > Date.now();
+                },
+
+                isSubtaskHiddenDone(subtask) {
+                    return !!subtask?.done && !this.isSubtaskRecentlyDone(subtask);
+                },
+
+                scheduleSubtaskHideRefresh() {
+                    window.clearTimeout(this.subtaskHideTimer);
+                    const subtasks = this.tasks.flatMap(task => task.subtasks || [])
+                        .concat(this.editingTask?.subtasks || []);
+                    const delays = subtasks.filter(subtask => subtask.done)
+                        .map(subtask => Date.parse(subtask.done_at || '') + 3000 - Date.now())
+                        .filter(delay => delay > 0);
+                    if (!delays.length) return;
+                    this.subtaskHideTimer = window.setTimeout(() => {
+                        this.subtaskUiTick++;
+                        this.scheduleSubtaskHideRefresh();
+                    }, Math.min(...delays) + 1);
+                },
+
+                getEditingSubtaskEntries(done = false) {
+                    return (this.editingTask.subtasks || [])
+                        .map((subtask, index) => ({ subtask, index }))
+                        .filter(({ subtask }) => this.isSubtaskHiddenDone(subtask) === done);
+                },
+
+                canMoveEditingSubtask(index, direction) {
+                    const visible = this.getEditingSubtaskEntries(false);
+                    const position = visible.findIndex(entry => entry.index === index);
+                    return position >= 0 && position + direction >= 0 && position + direction < visible.length;
+                },
+
+                moveEditingSubtask(index, direction) {
+                    if (!this.canMoveEditingSubtask(index, direction)) return;
+                    const visible = this.getEditingSubtaskEntries(false);
+                    const position = visible.findIndex(entry => entry.index === index);
+                    const otherIndex = visible[position + direction].index;
+                    const reordered = [...this.editingTask.subtasks];
+                    [reordered[index], reordered[otherIndex]] = [reordered[otherIndex], reordered[index]];
+                    this.editingTask.subtasks = reordered;
+                },
+
                 getVisibleCardSubtasks(task, limit = 4) {
-                    return this.normalizeSubtasks(task?.subtasks).slice(0, limit);
+                    const active = this.normalizeSubtasks(task?.subtasks).filter(subtask => !this.isSubtaskHiddenDone(subtask));
+                    return limit === null ? active : active.slice(0, limit);
+                },
+
+                getHiddenCardSubtasks(task) {
+                    return this.normalizeSubtasks(task?.subtasks).filter(subtask => this.isSubtaskHiddenDone(subtask));
+                },
+
+                getDurationHourOptions(minutes) {
+                    return Array.from({ length: Math.max(12, this.getDurationHours(minutes)) + 1 }, (_, hour) => hour);
                 },
 
                 removeEditingSubtask(index) {
@@ -4352,6 +4449,7 @@
                     if (!subtask) return;
                     subtask.done = !!checked;
                     subtask.done_at = subtask.done ? new Date().toISOString() : '';
+                    this.scheduleSubtaskHideRefresh();
                 },
 
                 async saveTask() {
@@ -4366,7 +4464,6 @@
                         this.editingTask.reminder_offset_minutes = this.normalizeReminderOffsetMinutes(this.editingTask.reminder_offset_minutes);
                         this.editingTask.estimated_time = this.normalizeEstimatedMinutes(this.editingTask.estimated_time) || 15;
                         this.editingTask.points_weight = this.normalizePointsWeight(this.editingTask.points_weight);
-                        this.editingTask.subtasks = this.normalizeSubtasks(this.editingTask.subtasks);
                         const payload = this.pickTaskPayload(this.editingTask);
                         const subtasks = this.normalizeSubtasks(payload.subtasks);
                         if (subtasks.length > 0) {
@@ -4443,8 +4540,7 @@
                             return;
                         }
 
-                        this.taskModal = false;
-                        this.isCreatingTask = false;
+                        this.closeTaskModal();
                         await this.init();
                     } catch (error) {
                         this.showToast('Nie udalo sie zapisac zadania. Sprawdz polaczenie z backendem i odswiez strone.');

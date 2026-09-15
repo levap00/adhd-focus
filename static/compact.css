@@ -1,8 +1,15 @@
 /* Compact phone UI overrides — load after app.css */
 
+.task-modal-backdrop {
+    touch-action: pan-y;
+}
+
 .task-modal-surface {
     display: flex;
     flex-direction: column;
+    max-height: calc(100vh - 2rem);
+    max-height: calc(100dvh - 2rem);
+    overflow: hidden;
 }
 
 .task-sheet-head,
@@ -17,24 +24,50 @@
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
     overscroll-behavior: contain;
+    padding: 0.75rem 0.15rem;
+    touch-action: pan-y;
 }
 
+.task-sheet-head,
 .task-sheet-foot {
     flex: 0 0 auto;
+}
+
+.task-sheet-close {
+    width: 2.25rem;
+    height: 2.25rem;
+    border-radius: 0.65rem;
+    color: #64748b;
+}
+
+.task-sheet-close:hover {
+    background: rgba(148, 163, 184, 0.15);
+}
+
+.task-details-grid > div {
+    min-width: 0;
+}
+
+.task-details-grid input,
+.task-details-grid select {
+    min-width: 0;
+    max-width: 100%;
 }
 
 .task-chip-row {
     display: flex;
     flex-wrap: wrap;
     gap: 0.28rem;
+    margin-bottom: 0.6rem;
 }
 
 .task-chip {
     border: 1px solid rgba(148, 163, 184, 0.28);
     border-radius: 999px;
     background: #fff;
-    padding: 0.18rem 0.5rem;
-    font-size: 10px;
+    padding: 0.4rem 0.6rem;
+    min-height: 2rem;
+    font-size: 12px;
     font-weight: 800;
     color: #475569;
     line-height: 1.2;
@@ -48,27 +81,48 @@
     margin-top: 0.35rem;
     border-radius: 10px;
     background: rgba(241, 245, 249, 0.9);
-    padding: 0.32rem 0.5rem;
-    font-size: 10px;
+    padding: 0.5rem;
+    min-height: 2.25rem;
+    font-size: 12px;
     font-weight: 800;
     color: #64748b;
 }
 
 .subtask-move {
     display: inline-flex;
-    flex-direction: column;
-    gap: 0.08rem;
+    gap: 0.2rem;
 }
 
 .subtask-move button {
-    width: 1.35rem;
-    height: 1.05rem;
+    width: 2rem;
+    height: 2rem;
     border-radius: 6px;
     border: 1px solid rgba(148, 163, 184, 0.3);
     background: #f8fafc;
     font-size: 9px;
     line-height: 1;
     color: #64748b;
+}
+
+.subtask-move button:disabled {
+    opacity: 0.3;
+    cursor: default;
+}
+
+.subtask-row-meta select {
+    width: 4.2rem;
+    border: 1px solid rgba(148, 163, 184, 0.28);
+    border-radius: 8px;
+    background: #fff;
+    padding: 0.28rem 0.4rem;
+    font-size: 12px;
+    font-weight: 800;
+    color: #334155;
+}
+
+body.theme-dark .subtask-row-meta select {
+    background: #0f172a;
+    color: #cbd5e1;
 }
 
 .subtask-row.is-hiding {
@@ -101,6 +155,8 @@ body.theme-dark .subtask-move button {
     .topbar,
     .bottom-nav,
     .quick-capture-sheet,
+    .quick-capture-backdrop,
+    .task-modal-backdrop,
     .settings-dropdown,
     .focus-hero,
     .soft-panel {
@@ -175,6 +231,9 @@ body.theme-dark .subtask-move button {
         align-items: stretch !important;
         justify-content: stretch !important;
         padding: 0 !important;
+        top: var(--task-viewport-top, 0px);
+        bottom: auto;
+        height: var(--task-viewport-height, 100dvh);
     }
 
     .task-modal-surface {
@@ -182,11 +241,45 @@ body.theme-dark .subtask-move button {
         flex-direction: column !important;
         width: 100% !important;
         max-width: none !important;
-        height: 100dvh !important;
-        max-height: 100dvh !important;
+        height: 100% !important;
+        max-height: 100% !important;
         border-radius: 0 !important;
         overflow: hidden !important;
-        padding: calc(env(safe-area-inset-top) + 0.55rem) 0.7rem calc(env(safe-area-inset-bottom) + 0.55rem) !important;
+        padding: calc(env(safe-area-inset-top) + 0.4rem) max(0.65rem, env(safe-area-inset-right)) calc(env(safe-area-inset-bottom) + 0.4rem) max(0.65rem, env(safe-area-inset-left)) !important;
+    }
+
+    .task-sheet-head {
+        padding-bottom: 0.5rem;
+    }
+
+    .task-sheet-body {
+        padding-top: 0.5rem;
+        padding-bottom: 0.5rem;
+    }
+
+    .task-subtasks-panel {
+        padding: 0.6rem;
+        border-radius: 14px;
+    }
+
+    .task-details-toggle {
+        margin-top: 0.6rem;
+        padding: 0.55rem 0.75rem;
+    }
+
+    .task-sheet-foot,
+    .task-sheet-actions {
+        gap: 0.35rem;
+    }
+
+    .task-sheet-foot {
+        padding-top: 0.5rem;
+    }
+
+    .task-sheet-foot button {
+        min-height: 2.5rem;
+        padding: 0.4rem 0.7rem;
+        border-radius: 12px;
     }
 
     .task-name-input {
@@ -238,8 +331,10 @@ body.theme-dark .subtask-move button {
         padding: 0.16rem 0.32rem;
     }
 
-    .subtask-row-meta input {
-        width: 3.2rem;
+    .subtask-row-meta input,
+    .subtask-row-meta select {
+        width: 3.4rem;
+        min-height: 2rem;
         padding: 0.18rem 0.28rem;
         font-size: 12px;
     }
